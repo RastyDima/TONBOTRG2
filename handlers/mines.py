@@ -96,9 +96,12 @@ def win_text(game) -> str:
 
 
 def lose_text(game) -> str:
+    user = db.get_user(game.user_id)
+    balance = user["balance"] if user else 0
     return (
         f"💥 <b>Вы наступили на мину!</b>\n\n{render_field(game)}\n\n"
         f"Ставка {format_number(game.bet)} сгорела.\n"
+        f"💳 Баланс: <b>{format_number(balance)}</b>\n"
         f"🍀<i>seed</i>: <code>{game.seed}</code>"
     )
 

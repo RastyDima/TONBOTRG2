@@ -89,12 +89,15 @@ def win_text(game) -> str:
 
 
 def lose_text(game) -> str:
+    user = db.get_user(game.user_id)
+    balance = user["balance"] if user else 0
     text = "💀 <b>Вы открыли дверь со скелетом!</b>\n"
     for i, rd in enumerate(game.rounds, 1):
         text += f"\n🏁 Раунд {i}:\n{game.reveal_line(rd)}\n"
     text += (
         f"\nПройдено раундов: {game.round - 1}\n"
-        f"Ставка {format_number(game.bet)} сгорела."
+        f"Ставка {format_number(game.bet)} сгорела.\n"
+        f"💳 Баланс: <b>{format_number(balance)}</b>"
     )
     return text
 

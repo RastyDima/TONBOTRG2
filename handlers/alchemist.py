@@ -117,11 +117,14 @@ def win_text(game) -> str:
 def lose_text(game) -> str:
     result = game.result
     emoji, name, _ = result
+    user = db.get_user(game.user_id)
+    balance = user["balance"] if user else 0
     return (
         f"⚗️ <b>Алхимик</b>\n\n"
         f"💥 <b>Крак!</b>\n"
         f"{emoji} <b>{name}!</b>\n\n"
-        f"Зелье не получилось... Ставка {format_number(game.bet)} сгорела."
+        f"Зелье не получилось... Ставка {format_number(game.bet)} сгорела.\n"
+        f"💳 Баланс: <b>{format_number(balance)}</b>"
     )
 
 
