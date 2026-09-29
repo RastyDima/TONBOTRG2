@@ -11,6 +11,14 @@ const TITLE_COLORS = {
     title_ket: { color: '#64ffc8', bg: 'rgba(100,255,200,0.15)' },
 };
 
+const FRAME_EMBLEMS = {
+    frame_neon_green: '◆',
+    frame_fire_red: '✦',
+    frame_ice_blue: '❄',
+    frame_gold: '♛',
+    frame_diamond: '✧',
+};
+
 const AuthContext = createContext(null);
 
 function useAuth() {
@@ -119,6 +127,20 @@ function NavBar({ page, onNavigate }) {
     );
 }
 
+function FrameAvatar({ frame, photoUrl, initials, small = false }) {
+    const frameId = FRAME_EMBLEMS[frame] ? frame : 'default';
+    return (
+        <div className={`frame-avatar frame-avatar--${frameId}${small ? ' frame-avatar--small' : ''}`}>
+            <div className="frame-avatar-core">
+                {photoUrl ? <img src={photoUrl} alt="" /> : initials}
+            </div>
+            {FRAME_EMBLEMS[frame] && (
+                <span className="frame-avatar-emblem" aria-hidden="true">{FRAME_EMBLEMS[frame]}</span>
+            )}
+        </div>
+    );
+}
+
 function ProfilePage({ profile }) {
     if (!profile) return <Loading />;
     const level = calcLevel(profile.xp || 0);
@@ -137,11 +159,7 @@ function ProfilePage({ profile }) {
     return (
         <div>
             <div className="profile-header">
-                <div className="avatar">
-                    {photoUrl ? (
-                        <img src={photoUrl} alt="" style={{width:'100%',height:'100%',borderRadius:'50%',objectFit:'cover'}} />
-                    ) : initials}
-                </div>
+                <FrameAvatar frame={profile.active_frame} photoUrl={photoUrl} initials={initials} />
                 <div className="profile-info">
                     <div className="profile-name">{profile.first_name || 'Игрок'}</div>
                     <div className="profile-id">ID: {profile.user_id}</div>
@@ -363,6 +381,7 @@ function ShopPage({ profile, refreshProfile }) {
                             className={`shop-card ${f.active ? 'active' : ''}`}
                             style={{ borderColor: f.active ? `rgb(${f.color.join(',')})` : undefined }}
                         >
+                            <FrameAvatar frame={f.id} initials={f.name[0]} small />
                             <div className="item-name" style={{ color: `rgb(${f.color.join(',')})` }}>{f.name}</div>
                             {f.owned ? (
                                 <>

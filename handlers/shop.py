@@ -1,21 +1,24 @@
+from pathlib import Path
+
 from aiogram import Router, F
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, FSInputFile, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from database import db
 from keyboards.common import back_button
 
 router = Router()
+FRAMES_GALLERY = Path(__file__).resolve().parent.parent / "assets" / "frames_gallery.png"
 
 SHOP_ITEMS = {
     "frames": [
-        {"id": "frame_neon_green", "name": "Neon Green", "price": 500_000, "color": (0, 255, 120)},
-        {"id": "frame_fire_red", "name": "Fire Red", "price": 750_000, "color": (255, 60, 40)},
-        {"id": "frame_ice_blue", "name": "Ice Blue", "price": 1_000_000, "color": (60, 180, 255)},
-        {"id": "frame_gold", "name": "Gold", "price": 2_000_000, "color": (255, 210, 60)},
-        {"id": "frame_diamond", "name": "Diamond", "price": 5_000_000, "color": (180, 230, 255)},
+        {"id": "frame_neon_green", "name": "Неоновый контур", "price": 500_000, "color": (0, 255, 120)},
+        {"id": "frame_fire_red", "name": "Инферно", "price": 750_000, "color": (255, 60, 40)},
+        {"id": "frame_ice_blue", "name": "Ледяные осколки", "price": 1_000_000, "color": (60, 180, 255)},
+        {"id": "frame_gold", "name": "Золотая корона", "price": 2_000_000, "color": (255, 210, 60)},
+        {"id": "frame_diamond", "name": "Алмазная призма", "price": 5_000_000, "color": (180, 230, 255)},
     ],
     "titles": [
         {"id": "title_vip", "name": "VIP", "price": 1_000_000},
@@ -57,6 +60,8 @@ def shop_category_kb(category: str, items: list, user_id: int):
         else:
             label = f"{item['name']} — {_format_price(item['price'])} TON"
         kb.button(text=label, callback_data=f"shop_buy:{item['id']}")
+    if category == "frames":
+        kb.button(text="👁 Посмотреть рамки", callback_data="shop_frames_preview")
     kb.button(text="◀ Назад", callback_data="shop")
     kb.adjust(1)
     return kb.as_markup()
@@ -118,8 +123,18 @@ async def shop_frames_callback(callback: CallbackQuery, state: FSMContext):
         text += f"\n🟢 Активная: <b>{name}</b>"
     text += "\n\nВыберите рамку для покупки:"
     await callback.message.edit_text(text, reply_markup=shop_category_kb(
-        callback.from_user.id, SHOP_ITEMS["frames"], callback.from_user.id,
+        "frames", SHOP_ITEMS["frames"], callback.from_user.id,
     ))
+
+
+@router.callback_query(F.data == "shop_frames_preview", StateFilter("*"))
+async def shop_frames_preview_callback(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.answer()
+    await callback.message.answer_photo(
+        photo=FSInputFile(FRAMES_GALLERY),
+        caption="🖼 Рамки на карточке профиля. Выберите понравившуюся в меню магазина выше.",
+    )
 
 
 @router.callback_query(F.data == "shop_titles", StateFilter("*"))
@@ -136,7 +151,7 @@ async def shop_titles_callback(callback: CallbackQuery, state: FSMContext):
         text += f"\n🟢 Активный: <b>{name}</b>"
     text += "\n\nВыберите титул для покупки:"
     await callback.message.edit_text(text, reply_markup=shop_category_kb(
-        callback.from_user.id, SHOP_ITEMS["titles"], callback.from_user.id,
+        "titles", SHOP_ITEMS["titles"], callback.from_user.id,
     ))
 
 
@@ -178,7 +193,7 @@ async def shop_buy_callback(callback: CallbackQuery, state: FSMContext):
             f"Списано: {_format_price(item['price'])} TON\n"
             f"💰 Баланс: <b>{_format_price(balance)} TON</b>\n\n"
             f"Теперь вы можете активировать товар в «Мои покупки».",
-            reply_markup=shop_category_kb(callback.from_user.id, SHOP_ITEMS[category], callback.from_user.id),
+            reply_markup=shop_category_kb(category, SHOP_ITEMS[category], callback.from_user.id),
         )
     else:
         await callback.answer("❌ Ошибка покупки", show_alert=True)

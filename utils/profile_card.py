@@ -1,6 +1,7 @@
 """Compact profile cards with custom frames, mixed-script names and animated avatars."""
 
 import io
+import math
 import os
 from functools import lru_cache
 
@@ -168,6 +169,110 @@ def _badge(img, xy, label, color):
 AVATAR_XY = (50, 89, 138, 177)
 
 
+def _avatar_frame(img, frame):
+    """Draw a distinct ornament for each purchased frame over the avatar."""
+    draw = ImageDraw.Draw(img)
+    cx, cy = 94 * SCALE, 133 * SCALE
+
+    def point(angle, radius):
+        a = math.radians(angle)
+        return (round(cx + radius * SCALE * math.cos(a)),
+                round(cy + radius * SCALE * math.sin(a)))
+
+    def ring(radius, color, width=2):
+        r = radius * SCALE
+        draw.ellipse((cx - r, cy - r, cx + r, cy + r),
+                     outline=color, width=width * SCALE)
+
+    if frame == "frame_neon_green":
+        ring(49, (26, 83, 79), 7)
+        for start, end in [(5, 64), (77, 154), (169, 236), (250, 348)]:
+            r = 49 * SCALE
+            draw.arc((cx - r, cy - r, cx + r, cy + r), start, end,
+                     fill=(52, 248, 186), width=4 * SCALE)
+        ring(44, (136, 255, 215), 1)
+        for angle in (0, 45, 90, 135, 180, 225, 270, 315):
+            draw.line((point(angle, 52), point(angle, 56)),
+                      fill=(67, 224, 174), width=2 * SCALE)
+            px, py = point(angle, 57)
+            draw.rectangle((px - 2 * SCALE, py - 2 * SCALE,
+                            px + 2 * SCALE, py + 2 * SCALE),
+                           fill=(170, 255, 221))
+
+    elif frame == "frame_fire_red":
+        ring(48, (115, 37, 53), 6)
+        for index, angle in enumerate(range(-90, 270, 45)):
+            base = [point(angle - 11, 46), point(angle + 11, 46)]
+            tip = point(angle + (4 if index % 2 else -4), 57)
+            draw.polygon((base[0], tip, base[1]),
+                         fill=(255, 79, 59) if index % 2 else (255, 125, 52))
+            draw.line((base[0], tip), fill=(255, 176, 81), width=SCALE)
+        ring(47, (255, 144, 76), 2)
+        ring(44, (255, 214, 137), 1)
+        for angle in (-68, -22, 112, 158):
+            px, py = point(angle, 55)
+            draw.ellipse((px - SCALE, py - SCALE, px + SCALE, py + SCALE),
+                         fill=(255, 216, 143))
+
+    elif frame == "frame_ice_blue":
+        ring(48, (44, 122, 169), 5)
+        for index, angle in enumerate(range(-90, 270, 30)):
+            base = (point(angle - 11, 47), point(angle + 11, 47))
+            tip = point(angle, 57 if index % 2 == 0 else 53)
+            draw.polygon((base[0], tip, base[1]),
+                         fill=(116, 215, 250) if index % 2 == 0 else (73, 166, 225))
+            draw.line((base[0], tip, base[1]),
+                      fill=(203, 246, 255), width=SCALE)
+        ring(46, (210, 247, 255), 1)
+        for angle in (45, 135, 225, 315):
+            draw.line((point(angle, 48), point(angle, 55)),
+                      fill=(229, 252, 255), width=SCALE)
+
+    elif frame == "frame_gold":
+        ring(48, (127, 86, 34), 6)
+        ring(49, (242, 194, 92), 2)
+        ring(44, (255, 226, 155), 1)
+        for angle in (125, 146, 167, 188, 209, 230, -50, -29, -8, 13, 34, 55):
+            start = point(angle - 5, 49)
+            tip = point(angle, 56)
+            end = point(angle + 5, 49)
+            draw.polygon((start, tip, end), fill=(227, 177, 71))
+            draw.line((start, tip), fill=(255, 226, 153), width=SCALE)
+        crown = [(78, 86), (79, 76), (85, 82), (94, 73), (103, 82),
+                 (109, 76), (110, 86)]
+        draw.polygon([(x * SCALE, y * SCALE) for x, y in crown],
+                     fill=(246, 194, 86))
+        draw.line([(x * SCALE, y * SCALE) for x, y in crown + crown[:1]],
+                  fill=(255, 231, 171), width=SCALE)
+        for x, y in ((79, 76), (94, 73), (109, 76)):
+            draw.ellipse(((x - 2) * SCALE, (y - 2) * SCALE,
+                          (x + 2) * SCALE, (y + 2) * SCALE),
+                         fill=(255, 240, 183))
+
+    elif frame == "frame_diamond":
+        for index, angle in enumerate(range(-90, 270, 30)):
+            facet = [point(angle, 55), point(angle + 15, 49),
+                     point(angle + 30, 55), point(angle + 15, 46)]
+            draw.polygon(facet, fill=(53, 83, 112) if index % 2 else (78, 119, 147))
+        vertices = [point(angle, 55 if index % 2 == 0 else 50)
+                    for index, angle in enumerate(range(-90, 270, 15))]
+        draw.line(vertices + vertices[:1], fill=(199, 239, 255), width=2 * SCALE)
+        for angle in range(-90, 270, 30):
+            draw.line((point(angle, 55), point(angle + 15, 47), point(angle + 30, 55)),
+                      fill=(107, 191, 231), width=SCALE)
+        ring(47, (228, 249, 255), 2)
+        ring(44, (127, 191, 224), 1)
+        for angle in (-45, 45, 135, 225):
+            px, py = point(angle, 57)
+            draw.line((px - 3 * SCALE, py, px + 3 * SCALE, py),
+                      fill=(248, 254, 255), width=SCALE)
+            draw.line((px, py - 3 * SCALE, px, py + 3 * SCALE),
+                      fill=(248, 254, 255), width=SCALE)
+
+    else:
+        ring(49, PURPLE, 2)
+
+
 def _avatar_frames(data):
     """Sample at most ten frames while retaining the source loop duration."""
     if not data:
@@ -214,15 +319,13 @@ def generate_profile_card(
     _text(img, (560, 43), "ПРОФИЛЬ ИГРОКА", 10, MUTED, align="right")
     _line(img, (40, 69, 560, 69))
 
-    ring_color = FRAME_COLORS.get(frame, PURPLE)
     draw = ImageDraw.Draw(img)
-    draw.ellipse((45 * SCALE, 84 * SCALE, 143 * SCALE, 182 * SCALE),
-                 outline=ring_color, width=2 * SCALE)
     draw.ellipse(tuple(v * SCALE for v in AVATAR_XY), fill=(40, 37, 64))
     clean_name = " ".join((name or "Игрок").split()) or "Игрок"
     frames, durations = _avatar_frames(avatar_bytes)
     if not frames:
         _text(img, (94, 116), clean_name[:1].upper(), 36, PURPLE, bold=True, align="center")
+        _avatar_frame(img, frame)
     _text(img, (160, 96), clean_name, 30, bold=True, max_width=395, min_size=20)
     if title:
         title_label, title_color = TITLE_DISPLAY.get(title, (title, PURPLE))
@@ -293,6 +396,7 @@ def generate_profile_card(
         for avatar in frames:
             image = img.copy()
             _paste_avatar(image, avatar)
+            _avatar_frame(image, frame)
             rendered.append(image)
         # A shared palette keeps the card stable and includes every avatar colour.
         samples = Image.new("RGB", (150 * len(rendered), 195))
@@ -305,6 +409,7 @@ def generate_profile_card(
     else:
         if frames:
             _paste_avatar(img, frames[0])
+            _avatar_frame(img, frame)
         img.save(buf, format="PNG", optimize=False)
     buf.seek(0)
     return buf
