@@ -21,10 +21,16 @@ SHOP_ITEMS = {
         {"id": "frame_diamond", "name": "Алмазная призма", "price": 5_000_000, "color": (180, 230, 255)},
     ],
     "titles": [
+        {"id": "title_spark", "name": "Собиратель искр", "price": 250_000},
+        {"id": "title_crystal", "name": "Искатель кристаллов", "price": 750_000},
         {"id": "title_vip", "name": "Ловец удачи", "price": 1_000_000},
+        {"id": "title_elixir", "name": "Лунный алхимик", "price": 2_000_000},
         {"id": "title_legend", "name": "Повелитель риска", "price": 3_000_000},
+        {"id": "title_shadow", "name": "Хранитель тайны", "price": 4_000_000},
         {"id": "title_whale", "name": "Алмазный магнат", "price": 5_000_000},
+        {"id": "title_jackpot", "name": "Хранитель джекпота", "price": 7_500_000},
         {"id": "title_god", "name": "Владыка судьбы", "price": 10_000_000},
+        {"id": "title_fortune", "name": "Архитектор фортуны", "price": 15_000_000},
     ],
     "exclusive_titles": [
         {"id": "title_owner", "name": "Владелец"},

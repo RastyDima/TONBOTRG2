@@ -3,10 +3,16 @@ const { useState, useEffect, useCallback, createContext, useContext } = React;
 const API_BASE = '/app/api';
 
 const TITLE_COLORS = {
+    title_spark: { color: '#ffb86c', bg: 'rgba(255,184,108,0.15)' },
+    title_crystal: { color: '#72e4ff', bg: 'rgba(114,228,255,0.15)' },
     title_vip: { color: '#ffd23c', bg: 'rgba(255,210,60,0.15)' },
+    title_elixir: { color: '#b78cff', bg: 'rgba(183,140,255,0.15)' },
     title_legend: { color: '#ffb432', bg: 'rgba(255,180,50,0.15)' },
+    title_shadow: { color: '#8995ff', bg: 'rgba(137,149,255,0.15)' },
     title_whale: { color: '#50c8ff', bg: 'rgba(80,200,255,0.15)' },
+    title_jackpot: { color: '#ff75bb', bg: 'rgba(255,117,187,0.15)' },
     title_god: { color: '#b478ff', bg: 'rgba(180,120,255,0.15)' },
+    title_fortune: { color: '#72f0b2', bg: 'rgba(114,240,178,0.15)' },
     title_owner: { color: '#ff5050', bg: 'rgba(255,80,80,0.15)' },
     title_ket: { color: '#64ffc8', bg: 'rgba(100,255,200,0.15)' },
 };
@@ -171,8 +177,11 @@ function ProfilePage({ profile, refreshProfile }) {
         : '0.0';
     const titleInfo = profile.active_title ? TITLE_COLORS[profile.active_title] : null;
     const titleNames = {
+        title_spark: 'СОБИРАТЕЛЬ ИСКР', title_crystal: 'ИСКАТЕЛЬ КРИСТАЛЛОВ',
         title_vip: 'ЛОВЕЦ УДАЧИ', title_legend: 'ПОВЕЛИТЕЛЬ РИСКА',
+        title_elixir: 'ЛУННЫЙ АЛХИМИК', title_shadow: 'ХРАНИТЕЛЬ ТАЙНЫ',
         title_whale: 'АЛМАЗНЫЙ МАГНАТ', title_god: 'ВЛАДЫКА СУДЬБЫ',
+        title_jackpot: 'ХРАНИТЕЛЬ ДЖЕКПОТА', title_fortune: 'АРХИТЕКТОР ФОРТУНЫ',
         title_owner: 'OWNER', title_ket: 'KET',
     };
     const initials = (profile.first_name || 'K')[0].toUpperCase();

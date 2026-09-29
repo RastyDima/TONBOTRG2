@@ -176,10 +176,16 @@ async def admin_give_rubies_amount(message: Message, state: FSMContext):
 
 
 ALL_TITLES = [
+    {"id": "title_spark", "name": "Собиратель искр"},
+    {"id": "title_crystal", "name": "Искатель кристаллов"},
     {"id": "title_vip", "name": "Ловец удачи"},
+    {"id": "title_elixir", "name": "Лунный алхимик"},
     {"id": "title_legend", "name": "Повелитель риска"},
+    {"id": "title_shadow", "name": "Хранитель тайны"},
     {"id": "title_whale", "name": "Алмазный магнат"},
+    {"id": "title_jackpot", "name": "Хранитель джекпота"},
     {"id": "title_god", "name": "Владыка судьбы"},
+    {"id": "title_fortune", "name": "Архитектор фортуны"},
     {"id": "title_owner", "name": "Владелец"},
     {"id": "title_ket", "name": "Кет"},
 ]
