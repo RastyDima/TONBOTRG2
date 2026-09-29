@@ -3,7 +3,7 @@ from pathlib import Path
 from aiogram import Router, F
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, FSInputFile, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, FSInputFile, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from database import db
@@ -60,6 +60,8 @@ def shop_category_kb(category: str, items: list, user_id: int):
         else:
             label = f"{item['name']} — {_format_price(item['price'])} TON"
         kb.button(text=label, callback_data=f"shop_buy:{item['id']}")
+        if category == "frames":
+            kb.button(text=f"👁 Примерить: {item['name']}", callback_data=f"shop_try:{item['id']}")
     if category == "frames":
         kb.button(text="👁 Посмотреть рамки", callback_data="shop_frames_preview")
     kb.button(text="◀ Назад", callback_data="shop")
@@ -135,6 +137,31 @@ async def shop_frames_preview_callback(callback: CallbackQuery, state: FSMContex
         photo=FSInputFile(FRAMES_GALLERY),
         caption="🖼 Рамки на карточке профиля. Выберите понравившуюся в меню магазина выше.",
     )
+
+
+@router.callback_query(F.data.startswith("shop_try:"), StateFilter("*"))
+async def shop_try_callback(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.answer()
+    frame_id = callback.data.split(":", 1)[1]
+    item = FRAME_BY_ID.get(frame_id)
+    user = db.get_user(callback.from_user.id)
+    if not item or not user:
+        await callback.message.answer("Рамка недоступна")
+        return
+    from handlers.profile import _make_card
+
+    stats = db.get_stats(user["id"])
+    filename, data = await _make_card(
+        user, stats, user.get("referral_count", 0) or 0,
+        callback.from_user, frame_override=frame_id,
+    )
+    caption = f"👁 Примерка: <b>{item['name']}</b>\nКупить рамку можно в меню магазина выше."
+    photo = BufferedInputFile(data, filename=filename)
+    if filename.endswith(".gif"):
+        await callback.message.answer_animation(animation=photo, caption=caption)
+    else:
+        await callback.message.answer_photo(photo=photo, caption=caption)
 
 
 @router.callback_query(F.data == "shop_titles", StateFilter("*"))

@@ -7,6 +7,7 @@ from aiohttp import web
 
 from database import db
 from handlers.shop import SHOP_ITEMS, FRAME_BY_ID, TITLE_BY_ID, ALL_BY_ID
+from utils.achievements import ACHIEVEMENTS
 from webapp_auth import validate_telegram_init_data
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,13 @@ def register_webapp_routes(app: web.Application) -> None:
             return _json_response({"error": "unauthorized"}, 401)
 
         stats = db.get_stats(user["id"])
+        earned = set(db.get_achievements(user["id"]))
+        showcase_ids = db.get_showcase(user["id"])
+        awards = [
+            {"id": award_id, "name": award["name"], "icon": award["icon"]}
+            for award_id, award in ACHIEVEMENTS.items() if award_id in earned
+        ]
+        award_by_id = {award["id"]: award for award in awards}
         return _json_response({
             "user_id": user["id"],
             "username": user.get("username"),
@@ -106,7 +114,30 @@ def register_webapp_routes(app: web.Application) -> None:
             "total_bet": stats.get("total_bet", 0) if stats else 0,
             "total_won": stats.get("total_won", 0) if stats else 0,
             "referral_count": user.get("referral_count", 0),
+            "earned_achievements": awards,
+            "showcase": [award_by_id[award_id] for award_id in showcase_ids
+                         if award_id in award_by_id],
         })
+
+    async def api_showcase_toggle(request):
+        user = await _auth_user(request)
+        if not user:
+            return _json_response({"error": "unauthorized"}, 401)
+        try:
+            body = await request.json()
+        except Exception:
+            return _json_response({"error": "bad request"}, 400)
+        if not isinstance(body, dict):
+            return _json_response({"error": "bad request"}, 400)
+        award_id = body.get("achievement_id")
+        if not isinstance(award_id, str) or award_id not in ACHIEVEMENTS:
+            return _json_response({"error": "invalid achievement"}, 400)
+        result = db.toggle_showcase(user["id"], award_id)
+        if result == "not_earned":
+            return _json_response({"error": "not earned"}, 403)
+        if result == "full":
+            return _json_response({"error": "showcase full"}, 409)
+        return _json_response({"ok": True, "result": result})
 
     # --- Shop ---
 
@@ -264,6 +295,7 @@ def register_webapp_routes(app: web.Application) -> None:
     # Register API routes
     app.router.add_post(f"{WEBAPP_API_PREFIX}/api/auth", api_auth)
     app.router.add_get(f"{WEBAPP_API_PREFIX}/api/profile", api_profile)
+    app.router.add_post(f"{WEBAPP_API_PREFIX}/api/profile/showcase", api_showcase_toggle)
     app.router.add_get(f"{WEBAPP_API_PREFIX}/api/shop", api_shop)
     app.router.add_post(f"{WEBAPP_API_PREFIX}/api/shop/buy", api_shop_buy)
     app.router.add_post(f"{WEBAPP_API_PREFIX}/api/shop/equip", api_shop_equip)

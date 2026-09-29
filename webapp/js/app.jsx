@@ -127,10 +127,10 @@ function NavBar({ page, onNavigate }) {
     );
 }
 
-function FrameAvatar({ frame, photoUrl, initials, small = false }) {
+function FrameAvatar({ frame, photoUrl, initials, small = false, large = false }) {
     const frameId = FRAME_EMBLEMS[frame] ? frame : 'default';
     return (
-        <div className={`frame-avatar frame-avatar--${frameId}${small ? ' frame-avatar--small' : ''}`}>
+        <div className={`frame-avatar frame-avatar--${frameId}${small ? ' frame-avatar--small' : ''}${large ? ' frame-avatar--large' : ''}`}>
             <div className="frame-avatar-core">
                 {photoUrl ? <img src={photoUrl} alt="" /> : initials}
             </div>
@@ -141,8 +141,30 @@ function FrameAvatar({ frame, photoUrl, initials, small = false }) {
     );
 }
 
-function ProfilePage({ profile }) {
+function ProfilePage({ profile, refreshProfile }) {
+    const [editingShowcase, setEditingShowcase] = useState(false);
+    const [showcaseBusy, setShowcaseBusy] = useState(false);
+    const [showcaseError, setShowcaseError] = useState('');
     if (!profile) return <Loading />;
+    const showcase = profile.showcase || [];
+    const earnedAwards = profile.earned_achievements || [];
+    const toggleAward = async (awardId) => {
+        if (showcaseBusy) return;
+        setShowcaseBusy(true);
+        setShowcaseError('');
+        try {
+            await api('/profile/showcase', {
+                method: 'POST',
+                body: JSON.stringify({ achievement_id: awardId }),
+            });
+            await refreshProfile();
+        } catch (e) {
+            setShowcaseError(e.message === 'showcase full'
+                ? 'Можно выбрать только три награды.' : 'Не удалось обновить витрину.');
+        } finally {
+            setShowcaseBusy(false);
+        }
+    };
     const level = calcLevel(profile.xp || 0);
     const winrate = profile.total_games > 0
         ? ((profile.wins / profile.total_games) * 100).toFixed(1)
@@ -251,6 +273,44 @@ function ProfilePage({ profile }) {
                     <span className="stat-value">{profile.referral_count}</span>
                 </div>
             </div>
+            <div className="card showcase-card">
+                <div className="showcase-heading">
+                    <div className="card-title">✨ Витрина достижений</div>
+                    {earnedAwards.length > 0 && (
+                        <button className="showcase-edit" onClick={() => setEditingShowcase(!editingShowcase)}>
+                            {editingShowcase ? 'Готово' : 'Изменить'}
+                        </button>
+                    )}
+                </div>
+                <div className="showcase-slots">
+                    {[0, 1, 2].map(index => {
+                        const award = showcase[index];
+                        return (
+                            <div className={`showcase-slot ${award ? 'filled' : ''}`} key={index}>
+                                {award ? <><span className="showcase-icon">{award.icon}</span><span>{award.name}</span></>
+                                    : <span className="showcase-empty">Награда</span>}
+                            </div>
+                        );
+                    })}
+                </div>
+                {earnedAwards.length === 0 && <p className="showcase-hint">Сыграйте первую игру, чтобы открыть награду.</p>}
+                {editingShowcase && (
+                    <div className="showcase-picker">
+                        <p className="showcase-hint">Выберите до трёх полученных достижений.</p>
+                        {earnedAwards.map(award => {
+                            const selected = showcase.some(item => item.id === award.id);
+                            return (
+                                <button key={award.id} className={`showcase-option ${selected ? 'selected' : ''}`}
+                                    disabled={showcaseBusy || (!selected && showcase.length >= 3)}
+                                    onClick={() => toggleAward(award.id)}>
+                                    <span>{award.icon} {award.name}</span><span>{selected ? '✓' : '+'}</span>
+                                </button>
+                            );
+                        })}
+                        {showcaseError && <p className="showcase-error">{showcaseError}</p>}
+                    </div>
+                )}
+            </div>
         </div>
     );
 }
@@ -289,6 +349,9 @@ function GamesPage() {
 function ShopPage({ profile, refreshProfile }) {
     const [shop, setShop] = useState(null);
     const [toast, setToast] = useState(null);
+    const [tryOn, setTryOn] = useState(null);
+    const photoUrl = window.Telegram?.WebApp?.initDataUnsafe?.user?.photo_url;
+    const initials = (profile?.first_name || 'И')[0].toUpperCase();
 
     useEffect(() => {
         api('/shop').then(setShop).catch(() => {});
@@ -316,10 +379,12 @@ function ShopPage({ profile, refreshProfile }) {
                 );
                 return { ...s, frames: update(s.frames), titles: update(s.titles) };
             });
+            return true;
         } catch (e) {
             if (e.message === 'insufficient balance') showToast('Недостаточно TON', 'error');
             else if (e.message === 'already owned') showToast('Уже куплено', 'error');
             else showToast('Ошибка', 'error');
+            return false;
         }
     };
 
@@ -331,13 +396,10 @@ function ShopPage({ profile, refreshProfile }) {
             });
             showToast('Экипировано!');
             refreshProfile();
-            setShop(s => {
-                if (!s) return s;
-                const update = (items, cat) => items.map(i =>
-                    i.category === cat ? { ...i, active: i.id === itemId } : { ...i, active: false }
-                );
-                return s;
-            });
+            setShop(s => s && ({ ...s,
+                frames: itemId.startsWith('frame') ? s.frames.map(i => ({ ...i, active: i.id === itemId })) : s.frames,
+                titles: itemId.startsWith('title') ? s.titles.map(i => ({ ...i, active: i.id === itemId })) : s.titles,
+            }));
         } catch (e) {
             showToast('Ошибка', 'error');
         }
@@ -351,6 +413,10 @@ function ShopPage({ profile, refreshProfile }) {
             });
             showToast('Снято');
             refreshProfile();
+            setShop(s => s && ({ ...s,
+                frames: category === 'frame' ? s.frames.map(i => ({ ...i, active: false })) : s.frames,
+                titles: category === 'title' ? s.titles.map(i => ({ ...i, active: false })) : s.titles,
+            }));
         } catch (e) {
             showToast('Ошибка', 'error');
         }
@@ -361,6 +427,30 @@ function ShopPage({ profile, refreshProfile }) {
     return (
         <div>
             <Toast {...toast} />
+            {tryOn && (
+                <div className="tryon-overlay" role="dialog" aria-modal="true" aria-label="Примерка рамки"
+                    onClick={() => setTryOn(null)}>
+                    <div className="tryon-panel" onClick={event => event.stopPropagation()}>
+                        <button className="tryon-close" onClick={() => setTryOn(null)} aria-label="Закрыть">×</button>
+                        <div className="tryon-label">ПРИМЕРКА РАМКИ</div>
+                        <div className="tryon-profile">
+                            <FrameAvatar frame={tryOn.id} photoUrl={photoUrl} initials={initials} large />
+                            <div className="profile-info">
+                                <div className="profile-name">{profile?.first_name || 'Игрок'}</div>
+                                <div className="profile-id">ID: {profile?.user_id || '—'}</div>
+                                <div className="tryon-level">Уровень {calcLevel(profile?.xp || 0).level}</div>
+                            </div>
+                        </div>
+                        <div className="tryon-name">{tryOn.name}</div>
+                        <p className="tryon-note">Так рамка будет выглядеть на вашем аватаре.</p>
+                        {!tryOn.owned && (
+                            <button className="btn btn-gold" onClick={async () => {
+                                if (await buy(tryOn.id)) setTryOn(null);
+                            }}>Купить за {formatNumber(tryOn.price)} TON</button>
+                        )}
+                    </div>
+                </div>
+            )}
             <div className="section-title">🛒 Магазин</div>
             <div className="card">
                 <div className="balance-row">
@@ -381,8 +471,9 @@ function ShopPage({ profile, refreshProfile }) {
                             className={`shop-card ${f.active ? 'active' : ''}`}
                             style={{ borderColor: f.active ? `rgb(${f.color.join(',')})` : undefined }}
                         >
-                            <FrameAvatar frame={f.id} initials={f.name[0]} small />
+                            <FrameAvatar frame={f.id} photoUrl={photoUrl} initials={initials} small />
                             <div className="item-name" style={{ color: `rgb(${f.color.join(',')})` }}>{f.name}</div>
+                            <button className="btn-unequip tryon-trigger" onClick={() => setTryOn(f)}>Примерить</button>
                             {f.owned ? (
                                 <>
                                     <div className="item-owned">✓ Куплено</div>
@@ -645,7 +736,7 @@ function App() {
 
     const refreshProfile = useCallback(() => {
         if (!user) return;
-        api('/profile').then(setProfile).catch(() => {});
+        return api('/profile').then(setProfile).catch(() => {});
     }, [user]);
 
     useEffect(() => {
@@ -706,7 +797,7 @@ function App() {
                 <div className="subtitle">Играй и зарабатывай</div>
             </div>
 
-            {page === 'profile' && <ProfilePage profile={profile} />}
+            {page === 'profile' && <ProfilePage profile={profile} refreshProfile={refreshProfile} />}
             {page === 'games' && <GamesPage />}
             {page === 'shop' && <ShopPage profile={profile} refreshProfile={refreshProfile} />}
             {page === 'ref' && <ReferralPage profile={profile} />}

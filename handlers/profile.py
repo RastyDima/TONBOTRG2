@@ -17,6 +17,7 @@ from keyboards.common import back_button
 from utils.helpers import balance_text
 from utils.profile_card import generate_profile_card
 from utils.achievement_card import generate_achievements_card
+from utils.achievements import ACHIEVEMENTS
 
 router = Router()
 log = logging.getLogger(__name__)
@@ -102,10 +103,12 @@ async def _get_avatar(user_id: int) -> tuple[bytes | None, bool]:
     return await loop.run_in_executor(None, partial(_fetch_avatar_sync, user_id))
 
 
-async def _make_card(user, stats, ref_count, from_user):
+async def _make_card(user, stats, ref_count, from_user, frame_override=None):
     avatar_bytes, is_animated = await _get_avatar(user["id"])
     ach_count = len(db.get_achievements(user["id"]))
     from utils.achievements import TOTAL as ACH_TOTAL
+    showcase = [ACHIEVEMENTS[award_id]["name"] for award_id in db.get_showcase(user["id"])
+                if award_id in ACHIEVEMENTS]
     card_buf = generate_profile_card(
         user_id=user["id"],
         name=user["first_name"] or "Игрок",
@@ -118,11 +121,12 @@ async def _make_card(user, stats, ref_count, from_user):
         total_won=stats["total_won"],
         ref_count=ref_count,
         avatar_bytes=avatar_bytes,
-        frame=user.get("active_frame"),
+        frame=frame_override or user.get("active_frame"),
         title=user.get("active_title"),
         xp=user.get("xp", 0) or 0,
         ach_count=ach_count,
         ach_total=ACH_TOTAL,
+        showcase=showcase,
     )
     is_gif = card_buf.getvalue()[:6] in (b"GIF87a", b"GIF89a")
     ext = "gif" if is_gif else "png"
@@ -194,8 +198,64 @@ async def balance_callback(callback: CallbackQuery, state: FSMContext):
 
 def _ach_kb():
     kb = InlineKeyboardBuilder()
+    kb.button(text="✨ Настроить витрину", callback_data="showcase")
     kb.row(back_button("profile"))
     return kb.as_markup()
+
+
+def _showcase_kb(user_id: int):
+    owned = set(db.get_achievements(user_id))
+    selected = set(db.get_showcase(user_id))
+    kb = InlineKeyboardBuilder()
+    for award_id, award in ACHIEVEMENTS.items():
+        if award_id in owned:
+            mark = "✅" if award_id in selected else "➕"
+            kb.button(text=f"{mark} {award['name']}", callback_data=f"showcase_toggle:{award_id}")
+    kb.button(text="◀ К достижениям", callback_data="achievements")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def _showcase_text(user_id: int) -> str:
+    count = len(db.get_showcase(user_id))
+    if not db.get_achievements(user_id):
+        return "✨ <b>Витрина наград</b>\n\nПока нет полученных достижений. Сыграйте первую игру, чтобы открыть награду."
+    return (f"✨ <b>Витрина наград</b> · {count}/3\n\n"
+            "Выберите до трёх полученных достижений. Они появятся на карточке профиля.")
+
+
+@router.callback_query(F.data == "showcase", StateFilter("*"))
+async def showcase_callback(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.answer()
+    if not db.get_user(callback.from_user.id):
+        await callback.message.answer("Сначала нажмите /start")
+        return
+    await callback.message.answer(
+        _showcase_text(callback.from_user.id),
+        reply_markup=_showcase_kb(callback.from_user.id),
+    )
+
+
+@router.callback_query(F.data.startswith("showcase_toggle:"), StateFilter("*"))
+async def showcase_toggle_callback(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    award_id = callback.data.split(":", 1)[1]
+    if award_id not in ACHIEVEMENTS:
+        await callback.answer("Достижение не найдено", show_alert=True)
+        return
+    result = db.toggle_showcase(callback.from_user.id, award_id)
+    if result == "full":
+        await callback.answer("Сначала уберите одну из трёх наград", show_alert=True)
+        return
+    if result == "not_earned":
+        await callback.answer("Это достижение ещё не получено", show_alert=True)
+        return
+    await callback.answer("Витрина обновлена")
+    await callback.message.edit_text(
+        _showcase_text(callback.from_user.id),
+        reply_markup=_showcase_kb(callback.from_user.id),
+    )
 
 
 async def _send_achievements_card(message: Message, user: dict) -> bool:

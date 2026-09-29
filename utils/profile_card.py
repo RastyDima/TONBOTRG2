@@ -308,12 +308,15 @@ def generate_profile_card(
     total_games: int, wins: int, losses: int, total_bet: int, total_won: int,
     ref_count: int = 0, frame: str | None = None, avatar_bytes: bytes | None = None,
     title: str | None = None, xp: int = 0, ach_count: int = 0, ach_total: int = 0,
+    showcase: list[str] | None = None,
 ) -> io.BytesIO:
     from database import level_info, level_name
 
-    img = Image.new("RGB", (W, H), (12, 14, 23))
-    _gradient_panel(img, (16, 16, 584, 764), (25, 25, 43), (17, 21, 32), radius=28)
-    _rect(img, (16, 16, 584, 764), fill=None, radius=28, outline=BORDER)
+    showcase = (showcase or [])[:3]
+    height = 875 if showcase else 780
+    img = Image.new("RGB", (W, height * SCALE), (12, 14, 23))
+    _gradient_panel(img, (16, 16, 584, height - 16), (25, 25, 43), (17, 21, 32), radius=28)
+    _rect(img, (16, 16, 584, height - 16), fill=None, radius=28, outline=BORDER)
     _gem(img, 49, 47, 8, PURPLE, ton=True)
     _text(img, (66, 40), "TON", 14, WHITE, bold=True)
     _text(img, (560, 43), "ПРОФИЛЬ ИГРОКА", 10, MUTED, align="right")
@@ -388,7 +391,18 @@ def generate_profile_card(
     _text(img, (246, 698), "Приглашено друзей", 11, MUTED)
     _text(img, (542, 694), format_number(ref_count), 19, WHITE,
           bold=True, align="right", max_width=175, min_size=10)
-    _text(img, (300, 746), "TON  /  ТВОЯ ИГРОВАЯ СТАТИСТИКА", 8, DIM, align="center")
+    if showcase:
+        _rect(img, (40, 744, 560, 830), fill=PANEL, outline=BORDER)
+        _text(img, (56, 753), "Витрина наград", 12, MUTED, bold=True)
+        for index, award_name in enumerate(showcase):
+            x = 56 + index * 166
+            color = [(236, 208, 150), (158, 204, 255), (225, 173, 232)][index]
+            _rect(img, (x, 778, x + 156, 815), fill=(39, 37, 56), outline=(71, 64, 88), radius=9)
+            _gem(img, x + 16, 795, 5, color)
+            _text(img, (x + 29, 784), award_name, 11, WHITE, bold=True,
+                  max_width=119, min_size=8)
+            _text(img, (x + 29, 801), "НАГРАДА", 8, color)
+    _text(img, (300, height - 34), "TON  /  ТВОЯ ИГРОВАЯ СТАТИСТИКА", 8, DIM, align="center")
 
     buf = io.BytesIO()
     if len(frames) > 1:

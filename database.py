@@ -186,6 +186,15 @@ class Database:
                     PRIMARY KEY (user_id, achievement_id)
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_showcase (
+                    user_id INTEGER NOT NULL,
+                    achievement_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    PRIMARY KEY (user_id, achievement_id),
+                    UNIQUE (user_id, position)
+                )
+            """)
             conn.commit()
 
     # ---------- Пользователи ----------
@@ -632,6 +641,7 @@ class Database:
             conn.execute("DELETE FROM games")
             conn.execute("DELETE FROM promo_claims")
             conn.execute("DELETE FROM user_achievements")
+            conn.execute("DELETE FROM user_showcase")
             conn.execute("UPDATE promos SET used_count = 0")
 
     # ---------- Магазин ----------
@@ -694,6 +704,46 @@ class Database:
                 (user_id, achievement_id),
             )
             return cur.rowcount > 0
+
+    def get_showcase(self, user_id: int) -> list[str]:
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT achievement_id FROM user_showcase WHERE user_id = ? ORDER BY position",
+                (user_id,),
+            ).fetchall()
+            return [row["achievement_id"] for row in rows]
+
+    def toggle_showcase(self, user_id: int, achievement_id: str) -> str:
+        """Add or remove an earned award; return added, removed, full or not_earned."""
+        with closing(self._connect()) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute(
+                "SELECT position FROM user_showcase WHERE user_id = ? AND achievement_id = ?",
+                (user_id, achievement_id),
+            ).fetchone()
+            if current:
+                conn.execute(
+                    "DELETE FROM user_showcase WHERE user_id = ? AND achievement_id = ?",
+                    (user_id, achievement_id),
+                )
+                return "removed"
+            earned = conn.execute(
+                "SELECT 1 FROM user_achievements WHERE user_id = ? AND achievement_id = ?",
+                (user_id, achievement_id),
+            ).fetchone()
+            if not earned:
+                return "not_earned"
+            positions = {row["position"] for row in conn.execute(
+                "SELECT position FROM user_showcase WHERE user_id = ?", (user_id,),
+            )}
+            if len(positions) >= 3:
+                return "full"
+            position = next(slot for slot in range(3) if slot not in positions)
+            conn.execute(
+                "INSERT INTO user_showcase (user_id, achievement_id, position) VALUES (?, ?, ?)",
+                (user_id, achievement_id, position),
+            )
+            return "added"
 
     # ---------- XP / Уровни ----------
 
@@ -867,6 +917,15 @@ class PostgresDatabase:
                     achievement_id TEXT NOT NULL,
                     earned_at TEXT NOT NULL DEFAULT (to_char(LOCALTIMESTAMP, 'YYYY-MM-DD HH24:MI:SS')),
                     PRIMARY KEY (user_id, achievement_id)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_showcase (
+                    user_id BIGINT NOT NULL,
+                    achievement_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    PRIMARY KEY (user_id, achievement_id),
+                    UNIQUE (user_id, position)
                 )
             """)
 
@@ -1307,6 +1366,7 @@ class PostgresDatabase:
             cur.execute("DELETE FROM games")
             cur.execute("DELETE FROM promo_claims")
             cur.execute("DELETE FROM user_achievements")
+            cur.execute("DELETE FROM user_showcase")
             cur.execute("UPDATE promos SET used_count = 0")
 
     # ---------- Магазин ----------
@@ -1372,6 +1432,47 @@ class PostgresDatabase:
                 (user_id, achievement_id),
             )
             return cur.rowcount > 0
+
+    def get_showcase(self, user_id: int) -> list[str]:
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT achievement_id FROM user_showcase WHERE user_id = %s ORDER BY position",
+                (user_id,),
+            )
+            return [row["achievement_id"] for row in cur.fetchall()]
+
+    def toggle_showcase(self, user_id: int, achievement_id: str) -> str:
+        """Serialize edits per player so no more than three awards can be shown."""
+        with self._cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE id = %s FOR UPDATE", (user_id,))
+            if not cur.fetchone():
+                return "not_earned"
+            cur.execute(
+                "SELECT position FROM user_showcase WHERE user_id = %s AND achievement_id = %s",
+                (user_id, achievement_id),
+            )
+            if cur.fetchone():
+                cur.execute(
+                    "DELETE FROM user_showcase WHERE user_id = %s AND achievement_id = %s",
+                    (user_id, achievement_id),
+                )
+                return "removed"
+            cur.execute(
+                "SELECT 1 FROM user_achievements WHERE user_id = %s AND achievement_id = %s",
+                (user_id, achievement_id),
+            )
+            if not cur.fetchone():
+                return "not_earned"
+            cur.execute("SELECT position FROM user_showcase WHERE user_id = %s", (user_id,))
+            positions = {row["position"] for row in cur.fetchall()}
+            if len(positions) >= 3:
+                return "full"
+            position = next(slot for slot in range(3) if slot not in positions)
+            cur.execute(
+                "INSERT INTO user_showcase (user_id, achievement_id, position) VALUES (%s, %s, %s)",
+                (user_id, achievement_id, position),
+            )
+            return "added"
 
     # ---------- XP / Уровни ----------
 
