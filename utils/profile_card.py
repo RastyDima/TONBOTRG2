@@ -1,516 +1,310 @@
-"""Генератор профиль-карточки в стиле TON Casino — v3 + animated avatar support."""
-import io
-import math
-import os
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageSequence
+"""Compact profile cards with custom frames, mixed-script names and animated avatars."""
 
+import io
+import os
+from functools import lru_cache
+
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 from utils.helpers import format_number
 
 SCALE = 2
-W, H = 580 * SCALE, 780 * SCALE
-
+W, H = 600 * SCALE, 780 * SCALE
 FONT_DIR = os.path.join(os.path.dirname(__file__), "..", "assets")
-
-_NOTO = os.path.join(FONT_DIR, "noto_cjk.otf")
-_ARIAL_BD = os.path.join(FONT_DIR, "arialbd.ttf")
-_ARIAL = os.path.join(FONT_DIR, "arial.ttf")
-
-
-def _font(size: int, bold=True) -> ImageFont.FreeTypeFont:
-    if os.path.exists(_NOTO):
-        return ImageFont.truetype(_NOTO, size * SCALE)
-    name = "arialbd.ttf" if bold else "arial.ttf"
-    path = os.path.join(FONT_DIR, name)
-    if os.path.exists(path):
-        return ImageFont.truetype(path, size * SCALE)
-    return ImageFont.load_default()
-
-
-def _lerp_color(c1, c2, t):
-    return tuple(int(a + (b - a) * t) for a, b in zip(c1, c2))
-
-
-def _gradient_v(img, xy, c1, c2):
-    x0, y0, x1, y1 = xy
-    for y in range(y0, y1):
-        t = (y - y0) / max(1, y1 - y0)
-        color = _lerp_color(c1, c2, t)
-        ImageDraw.Draw(img).line([(x0, y), (x1, y)], fill=color)
-
-
-def _gradient_h(img, xy, c1, c2):
-    x0, y0, x1, y1 = xy
-    for x in range(x0, x1):
-        t = (x - x0) / max(1, x1 - x0)
-        color = _lerp_color(c1, c2, t)
-        ImageDraw.Draw(img).line([(x, y0), (x, y1)], fill=color)
-
-
-def _glow_rect(img, xy, radius, color, glow_radius=10):
-    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    d = ImageDraw.Draw(overlay)
-    x0, y0, x1, y1 = xy
-    for i in range(glow_radius, 0, -1):
-        alpha = int(70 * (1 - i / glow_radius))
-        c = color + (alpha,)
-        d.rounded_rectangle([x0 - i, y0 - i, x1 + i, y1 + i], radius=radius + i, fill=c)
-    img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"))
-
-
-def _circle_glow(img, cx, cy, r, color, glow_radius=16):
-    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    d = ImageDraw.Draw(overlay)
-    for i in range(glow_radius, 0, -1):
-        alpha = int(60 * (1 - i / glow_radius))
-        c = color + (alpha,)
-        d.ellipse([cx - r - i, cy - r - i, cx + r + i, cy + r + i], fill=c)
-    img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"))
-
-
-def _dot(draw, x, y, r, color):
-    draw.ellipse([x - r, y - r, x + r, y + r], fill=color)
-
-
-def _draw_diamond(draw, cx, cy, size, color, outline=None):
-    s = size
-    points = [(cx, cy - s), (cx + s, cy), (cx, cy + s), (cx - s, cy)]
-    draw.polygon(points, fill=color, outline=outline)
-
-
-def _draw_gem(draw, cx, cy, size, color, shine=None):
-    s = size
-    top = [(cx, cy - s), (cx + s * 0.6, cy - s * 0.3), (cx - s * 0.6, cy - s * 0.3)]
-    bot = [(cx - s * 0.6, cy - s * 0.3), (cx + s * 0.6, cy - s * 0.3), (cx + s * 0.8, cy + s * 0.1),
-           (cx, cy + s), (cx - s * 0.8, cy + s * 0.1)]
-    darker = tuple(max(0, c - 40) for c in color)
-    draw.polygon(top, fill=color, outline=darker)
-    draw.polygon(bot, fill=darker, outline=darker)
-    if shine:
-        small_top = [(cx, cy - s + 2), (cx + s * 0.25, cy - s * 0.4), (cx - s * 0.15, cy - s * 0.35)]
-        draw.polygon(small_top, fill=shine)
-
-
-def _draw_star(draw, cx, cy, size, color):
-    points = []
-    for i in range(10):
-        angle = math.radians(i * 36 - 90)
-        r = size if i % 2 == 0 else size * 0.45
-        points.append((cx + r * math.cos(angle), cy + r * math.sin(angle)))
-    draw.polygon(points, fill=color)
-
-
-def _draw_badge(draw, cx, cy, text, bg_color, text_color, border_color):
-    f = _font(10, bold=False)
-    bbox = draw.textbbox((0, 0), text, font=f)
-    tw = bbox[2] - bbox[0]
-    th = bbox[3] - bbox[1]
-    y_offset = bbox[1]
-    pad_x, pad_y = 8 * SCALE, 3 * SCALE
-    x0 = cx - tw // 2 - pad_x
-    y0 = cy - th // 2 - pad_y
-    x1 = cx + tw // 2 + pad_x
-    y1 = cy + th // 2 + pad_y
-    draw.rounded_rectangle([x0, y0, x1, y1], radius=6 * SCALE, fill=bg_color, outline=border_color, width=1)
-    draw.text((cx - tw // 2, cy - th // 2 - y_offset), text, fill=text_color, font=f)
-
-
-def _decorative_dots(draw, cx, y_start, count=5, spacing=8, color=(60, 50, 100)):
-    for i in range(count):
-        dx = (i - count // 2) * spacing * SCALE
-        _dot(draw, cx + dx, y_start, 2 * SCALE, color)
-
-
-def _level_color(level: int):
-    if level >= 30:
-        return (255, 80, 80), (255, 50, 50)
-    if level >= 20:
-        return (255, 180, 50), (255, 140, 30)
-    if level >= 15:
-        return (180, 120, 255), (150, 90, 255)
-    if level >= 10:
-        return (80, 200, 255), (60, 180, 255)
-    if level >= 5:
-        return (60, 220, 130), (40, 200, 110)
-    return (180, 160, 200), (140, 130, 175)
-
-
+WHITE = (242, 241, 250)
+MUTED = (158, 158, 182)
+DIM = (113, 116, 143)
+PURPLE = (173, 145, 255)
+GREEN = (99, 218, 177)
+PINK = (247, 139, 182)
+BORDER = (46, 47, 66)
+PANEL = (26, 28, 43)
 FRAME_COLORS = {
-    "frame_neon_green": (0, 255, 120),
-    "frame_fire_red": (255, 60, 40),
-    "frame_ice_blue": (60, 180, 255),
-    "frame_gold": (255, 210, 60),
+    "frame_neon_green": (0, 255, 120), "frame_fire_red": (255, 60, 40),
+    "frame_ice_blue": (60, 180, 255), "frame_gold": (255, 210, 60),
     "frame_diamond": (180, 230, 255),
+}
+TITLE_DISPLAY = {
+    "title_vip": ("VIP", (242, 203, 116)),
+    "title_legend": ("LEGEND", (255, 183, 109)),
+    "title_whale": ("WHALE", (112, 201, 255)),
+    "title_god": ("GOD", PURPLE),
+    "title_owner": ("OWNER", (255, 142, 151)),
+    "title_ket": ("KET", (111, 230, 192)),
 }
 
 
-def generate_profile_card(
-    user_id: int,
-    name: str,
-    balance: int,
-    rubies: float,
-    total_games: int,
-    wins: int,
-    losses: int,
-    total_bet: int,
-    total_won: int,
-    ref_count: int = 0,
-    frame: str | None = None,
-    avatar_bytes: bytes | None = None,
-    title: str | None = None,
-    xp: int = 0,
-    ach_count: int = 0,
-    ach_total: int = 0,
-) -> io.BytesIO:
-    BG_TOP = (12, 8, 24)
-    BG_BOT = (18, 12, 35)
-    CARD_BG = (20, 16, 40)
-    SECTION_BG = (24, 20, 48)
-    BORDER_DIM = (60, 40, 140)
-    BORDER = (90, 55, 200)
-    GLOW = (120, 70, 255)
-    WHITE = (240, 240, 255)
-    GRAY = (140, 130, 175)
-    GOLD = (255, 210, 60)
-    GOLD2 = (255, 180, 30)
-    PINK = (255, 90, 170)
-    PINK2 = (220, 60, 255)
-    CYAN = (80, 200, 255)
-    PURPLE = (150, 90, 255)
-    PURPLE2 = (180, 120, 255)
-    GREEN = (60, 220, 130)
-    RED = (255, 70, 90)
-    NEON_LINE = (80, 50, 180)
+@lru_cache(maxsize=128)
+def _font(size, bold=True, cjk=False):
+    filenames = (("noto_cjk.otf", "arial.ttf") if cjk else
+                 ("arialbd.ttf" if bold else "arial.ttf", "noto_cjk.otf"))
+    for filename in filenames:
+        path = os.path.join(FONT_DIR, filename)
+        if os.path.exists(path):
+            return ImageFont.truetype(path, size * SCALE)
+    return ImageFont.load_default()
 
-    img = Image.new("RGB", (W, H), BG_TOP)
-    _gradient_v(img, (0, 0, W, H), BG_TOP, BG_BOT)
 
-    glow_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    gd = ImageDraw.Draw(glow_layer)
-    for gx, gy, gr, gc in [
-        (W * 0.2, H * 0.15, 180, (60, 20, 140)),
-        (W * 0.8, H * 0.1, 120, (40, 15, 120)),
-        (W * 0.5, H * 0.85, 150, (50, 10, 130)),
-    ]:
-        for i in range(int(gr), 0, -2):
-            alpha = int(25 * (1 - i / gr))
-            gd.ellipse([gx - i, gy - i, gx + i, gy + i], fill=gc + (alpha,))
-    img = Image.alpha_composite(img.convert("RGBA"), glow_layer).convert("RGB")
+def _is_cjk(char):
+    code = ord(char)
+    return (0x2E80 <= code <= 0xA4CF or 0xAC00 <= code <= 0xD7AF
+            or 0xF900 <= code <= 0xFAFF or 0xFF00 <= code <= 0xFFEF
+            or 0x20000 <= code <= 0x3134F)
+
+
+def _runs(text, size, bold):
+    """Use real Arial weights, falling back only for CJK characters."""
+    runs = []
+    for char in text:
+        cjk = _is_cjk(char)
+        if runs and runs[-1][1] == cjk:
+            runs[-1] = (runs[-1][0] + char, cjk)
+        else:
+            runs.append((char, cjk))
+    return [(part, _font(size, bold, cjk)) for part, cjk in runs]
+
+
+def _width(text, size, bold=True):
+    return sum(font.getlength(part) for part, font in _runs(text, size, bold)) / SCALE
+
+
+def _fit(text, size, max_width, bold=True, min_size=None):
+    while size > (min_size or size) and _width(text, size, bold) > max_width:
+        size -= 1
+    if _width(text, size, bold) > max_width:
+        while text and _width(text + "…", size, bold) > max_width:
+            text = text[:-1]
+        text += "…"
+    return text, size
+
+
+def _text(img, xy, text, size, color=WHITE, *, bold=False,
+          max_width=None, min_size=None, align="left"):
+    text = " ".join(str(text).split())
+    if not text:
+        return
+    if max_width is not None:
+        text, size = _fit(text, size, max_width, bold, min_size)
+    runs = _runs(text, size, bold)
+    width = sum(font.getlength(part) for part, font in runs)
+    x, y = xy[0] * SCALE, xy[1] * SCALE
+    x -= width if align == "right" else width / 2 if align == "center" else 0
     draw = ImageDraw.Draw(img)
+    top = min(draw.textbbox((0, 0), part, font=font, anchor="ls")[1]
+              for part, font in runs)
+    for part, font in runs:
+        draw.text((x, y - top), part, font=font, fill=color, anchor="ls")
+        x += font.getlength(part)
 
-    _glow_rect(img, (16 * SCALE, 16 * SCALE, W - 16 * SCALE, H - 16 * SCALE), 30, GLOW, 16)
+
+def _rect(img, xy, fill=PANEL, radius=16, outline=None):
+    ImageDraw.Draw(img).rounded_rectangle(
+        tuple(round(v * SCALE) for v in xy), radius=radius * SCALE,
+        fill=fill, outline=outline, width=SCALE)
+
+
+def _line(img, xy, fill=BORDER):
+    ImageDraw.Draw(img).line(tuple(v * SCALE for v in xy), fill=fill, width=SCALE)
+
+
+def _gradient(width, height, start, end):
+    strip = Image.new("RGB", (width, 1))
+    strip.putdata([tuple(round(a + (b - a) * x / max(width - 1, 1))
+                        for a, b in zip(start, end)) for x in range(width)])
+    return strip.resize((width, height))
+
+
+def _round_mask(width, height, radius):
+    mask = Image.new("L", (width, height))
+    ImageDraw.Draw(mask).rounded_rectangle(
+        (0, 0, width - 1, height - 1), radius=radius, fill=255)
+    return mask
+
+
+def _gradient_panel(img, xy, start, end, radius=16):
+    x0, y0, x1, y1 = (round(v * SCALE) for v in xy)
+    width, height = x1 - x0, y1 - y0
+    img.paste(_gradient(width, height, start, end), (x0, y0),
+              _round_mask(width, height, radius * SCALE))
+
+
+def _progress(img, xy, progress):
+    """Clip to the rounded track without exaggerating tiny progress values."""
+    x0, y0, x1, y1 = (round(v * SCALE) for v in xy)
+    width, height = x1 - x0, y1 - y0
+    track = Image.new("RGB", (width, height), (48, 48, 69))
+    fill_width = round(width * max(0, min(progress, 1)))
+    if fill_width:
+        fill = _gradient(width, height, PURPLE, (127, 112, 236))
+        track.paste(fill.crop((0, 0, fill_width, height)), (0, 0))
+    img.paste(track, (x0, y0), _round_mask(width, height, height // 2))
+
+
+def _gem(img, cx, cy, size, color, ton=False):
     draw = ImageDraw.Draw(img)
-
-    card_rect = (20 * SCALE, 20 * SCALE, W - 20 * SCALE, H - 20 * SCALE)
-    draw.rounded_rectangle(card_rect, radius=28 * SCALE, fill=CARD_BG, outline=BORDER, width=2 * SCALE)
-
-    line_y = 36 * SCALE
-    draw.line([(60 * SCALE, line_y), (W - 60 * SCALE, line_y)], fill=NEON_LINE, width=1)
-    _dot(draw, 60 * SCALE, line_y, 3 * SCALE, PURPLE)
-    _dot(draw, W - 60 * SCALE, line_y, 3 * SCALE, PURPLE)
-
-    avatar_cx, avatar_cy = 130 * SCALE, 140 * SCALE
-    avatar_r = 64 * SCALE
-
-    avatar_is_gif = False
-    avatar_frames = []
-    avatar_drawn = False
-    if avatar_bytes:
-        try:
-            av_raw = Image.open(io.BytesIO(avatar_bytes))
-            avatar_is_gif = getattr(av_raw, "is_animated", False)
-            if avatar_is_gif:
-                for frame in ImageSequence.Iterator(av_raw):
-                    fr = frame.copy().convert("RGBA").resize((avatar_r * 2, avatar_r * 2), Image.LANCZOS)
-                    avatar_frames.append(fr)
-            else:
-                av_raw = av_raw.convert("RGBA")
-                av_raw = av_raw.resize((avatar_r * 2, avatar_r * 2), Image.LANCZOS)
-                avatar_frames = [av_raw]
-
-            if avatar_frames:
-                av = avatar_frames[0]
-                circle_mask = Image.new("L", av.size, 0)
-                ImageDraw.Draw(circle_mask).ellipse([0, 0, av.size[0], av.size[1]], fill=255)
-                avatar_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
-                avatar_layer.paste(av, (avatar_cx - avatar_r, avatar_cy - avatar_r), circle_mask)
-                img = Image.alpha_composite(img.convert("RGBA"), avatar_layer).convert("RGB")
-                draw = ImageDraw.Draw(img)
-                _circle_glow(img, avatar_cx, avatar_cy, avatar_r, GLOW, 20)
-                draw = ImageDraw.Draw(img)
-                draw.ellipse(
-                    [avatar_cx - avatar_r - 3 * SCALE, avatar_cy - avatar_r - 3 * SCALE,
-                     avatar_cx + avatar_r + 3 * SCALE, avatar_cy + avatar_r + 3 * SCALE],
-                    outline=PURPLE2, width=3 * SCALE,
-                )
-                draw.ellipse(
-                    [avatar_cx - avatar_r - 1 * SCALE, avatar_cy - avatar_r - 1 * SCALE,
-                     avatar_cx + avatar_r + 1 * SCALE, avatar_cy + avatar_r + 1 * SCALE],
-                    outline=(180, 140, 255), width=1 * SCALE,
-                )
-                avatar_drawn = True
-        except Exception:
-            pass
-
-    if not avatar_drawn:
-        _circle_glow(img, avatar_cx, avatar_cy, avatar_r, GLOW, 20)
-        draw = ImageDraw.Draw(img)
-        draw.ellipse(
-            [avatar_cx - avatar_r, avatar_cy - avatar_r,
-             avatar_cx + avatar_r, avatar_cy + avatar_r],
-            fill=(28, 22, 52), outline=PURPLE, width=3 * SCALE,
-        )
-        f_avatar = _font(44)
-        initials = name[:1].upper()
-        bbox = draw.textbbox((0, 0), initials, font=f_avatar)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        draw.text(
-            (avatar_cx - tw // 2, avatar_cy - th // 2 - 4 * SCALE),
-            initials, fill=PURPLE2, font=f_avatar,
-        )
-
-    if frame and frame in FRAME_COLORS:
-        fc = FRAME_COLORS[frame]
-        _circle_glow(img, avatar_cx, avatar_cy, avatar_r + 4 * SCALE, fc, 24)
-        draw = ImageDraw.Draw(img)
-        draw.ellipse(
-            [avatar_cx - avatar_r - 5 * SCALE, avatar_cy - avatar_r - 5 * SCALE,
-             avatar_cx + avatar_r + 5 * SCALE, avatar_cy + avatar_r + 5 * SCALE],
-            outline=fc, width=3 * SCALE,
-        )
-
-    f_name = _font(30)
-    f_id = _font(13, bold=False)
-    name_x = 220 * SCALE
-    draw.text((name_x, 85 * SCALE), name, fill=WHITE, font=f_name)
-    title_wrapped = False
-    if title:
-        TITLE_DISPLAY = {
-            "title_vip": ("VIP", GOLD, (60, 50, 20)),
-            "title_legend": ("LEGEND", (255, 180, 50), (60, 40, 15)),
-            "title_whale": ("WHALE", CYAN, (15, 40, 60)),
-            "title_god": ("GOD", PURPLE2, (40, 20, 60)),
-            "title_owner": ("OWNER", (255, 80, 80), (60, 15, 20)),
-            "title_ket": ("KET", (100, 255, 200), (15, 50, 40)),
-        }
-        t_text, t_color, t_bg = TITLE_DISPLAY.get(title, (title, GOLD, (50, 40, 15)))
-        f_title = _font(11, bold=True)
-        t_bbox = draw.textbbox((0, 0), t_text, font=f_title)
-        t_tw = t_bbox[2] - t_bbox[0]
-        t_th = t_bbox[3] - t_bbox[1]
-        banner_y = int(85 * SCALE + f_name.size * 1.2)
-        banner_h = t_th + 14 * SCALE
-        banner_x0 = name_x - 6 * SCALE
-        banner_x1 = W - 36 * SCALE
-        banner_y0 = banner_y
-        banner_y1 = banner_y + banner_h
-        t_x = (banner_x0 + banner_x1) // 2 - t_tw // 2
-        t_y = banner_y + (banner_h - t_th) // 2
-        overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        od = ImageDraw.Draw(overlay)
-        for i in range(12, 0, -1):
-            alpha = int(35 * (1 - i / 12))
-            od.rounded_rectangle([banner_x0 - i, banner_y0 - i, banner_x1 + i, banner_y1 + i],
-                                 radius=8 * SCALE, fill=t_color + (alpha,))
-        img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
-        draw = ImageDraw.Draw(img)
-        _gradient_h(img, (banner_x0, banner_y0, banner_x1, banner_y1), t_bg, (t_bg[0] // 2, t_bg[1] // 2, t_bg[2] // 2))
-        draw = ImageDraw.Draw(img)
-        draw.rounded_rectangle([banner_x0, banner_y0, banner_x1, banner_y1],
-                               radius=6 * SCALE, outline=t_color, width=2 * SCALE)
-        draw.text((t_x, t_y), t_text, fill=t_color, font=f_title)
-        title_wrapped = True
-
-    content_top = banner_y1 + 16 * SCALE if title_wrapped else 130 * SCALE
-
-    from database import level_info, level_name
-    li = level_info(xp)
-    lvl = li["level"]
-    lvl_name = level_name(lvl)
-    lvl_color, lvl_color2 = _level_color(lvl)
-
-    f_lvl = _font(18)
-    f_lvl_name = _font(10, bold=False)
-    draw.text((name_x, content_top), f"Ур. {lvl}", fill=lvl_color, font=f_lvl)
-    draw.text((name_x + 80 * SCALE, content_top + 4 * SCALE), lvl_name, fill=lvl_color2, font=f_lvl_name)
-
-    bar_x = name_x
-    bar_y = content_top + 24 * SCALE
-    bar_w = W - 280 * SCALE
-    bar_h = 10 * SCALE
-    draw.rounded_rectangle([bar_x, bar_y, bar_x + bar_w, bar_y + bar_h], radius=5 * SCALE, fill=(30, 24, 55))
-    if li["progress"] > 0:
-        fw = max(bar_h, int(bar_w * min(li["progress"], 1.0)))
-        _gradient_h(img, (bar_x, bar_y, bar_x + fw, bar_y + bar_h), lvl_color, lvl_color2)
-        draw = ImageDraw.Draw(img)
-        draw.rounded_rectangle([bar_x, bar_y, bar_x + fw, bar_y + bar_h], radius=5 * SCALE, outline=lvl_color, width=1)
-
-    xp_bottom = bar_y + bar_h + 3 * SCALE
-    f_xp = _font(8, bold=False)
-    xp_text = f"{li['xp']} / {li['next_level_xp']} XP"
-    draw.text((bar_x, xp_bottom), xp_text, fill=GRAY, font=f_xp)
-
-    id_y = xp_bottom + 16 * SCALE
-    draw.text((name_x, id_y), f"ID: {user_id}", fill=GRAY, font=f_id)
-
-    dots_y = id_y + 22 * SCALE
-    _decorative_dots(draw, W // 2, dots_y, 7, 10, (50, 35, 100))
-
-    sy = dots_y + 12 * SCALE
-    sec_h = 110 * SCALE
-    draw.rounded_rectangle(
-        (36 * SCALE, sy, W - 36 * SCALE, sy + sec_h),
-        radius=16 * SCALE, fill=SECTION_BG, outline=BORDER_DIM, width=1 * SCALE,
-    )
-    _gradient_h(img, (50 * SCALE, sy + 2 * SCALE, W - 50 * SCALE, sy + 3 * SCALE), BORDER_DIM, PURPLE)
-    draw = ImageDraw.Draw(img)
-
-    draw.text((56 * SCALE, sy + 14 * SCALE), "БАЛАНС", fill=GRAY, font=_font(10, bold=False))
-    _draw_diamond(draw, 66 * SCALE, sy + 52 * SCALE, 9 * SCALE, GOLD, outline=GOLD2)
-    f_bal = _font(28)
-    draw.text((84 * SCALE, sy + 36 * SCALE), f"{balance:,}".replace(",", " "), fill=GOLD, font=f_bal)
-    draw.text((84 * SCALE, sy + 74 * SCALE), "TON", fill=GOLD2, font=_font(11, bold=False))
-
-    mid = W // 2
-    draw.line([(mid, sy + 18 * SCALE), (mid, sy + sec_h - 18 * SCALE)], fill=BORDER_DIM, width=1)
-
-    draw.text((mid + 20 * SCALE, sy + 14 * SCALE), "РУБИНЫ", fill=GRAY, font=_font(10, bold=False))
-    _draw_gem(draw, mid + 30 * SCALE, sy + 52 * SCALE, 9 * SCALE, PINK, shine=(255, 180, 220))
-    f_rub = _font(28)
-    draw.text((mid + 48 * SCALE, sy + 36 * SCALE), f"{format_number(rubies)}", fill=PINK, font=f_rub)
-    draw.text((mid + 48 * SCALE, sy + 74 * SCALE), "GEMS", fill=PINK2, font=_font(11, bold=False))
-
-    sy2 = sy + sec_h + 16 * SCALE
-    stat_h = 306 * SCALE
-    draw.rounded_rectangle(
-        (36 * SCALE, sy2, W - 36 * SCALE, sy2 + stat_h),
-        radius=16 * SCALE, fill=SECTION_BG, outline=BORDER_DIM, width=1 * SCALE,
-    )
-    _gradient_h(img, (50 * SCALE, sy2 + 2 * SCALE, W - 50 * SCALE, sy2 + 3 * SCALE), BORDER_DIM, PURPLE)
-    draw = ImageDraw.Draw(img)
-
-    f_stat_title = _font(16)
-    draw.text((56 * SCALE, sy2 + 14 * SCALE), "СТАТИСТИКА", fill=PURPLE2, font=f_stat_title)
-    draw.line([(56 * SCALE, sy2 + 42 * SCALE), (W - 56 * SCALE, sy2 + 42 * SCALE)],
-              fill=(40, 30, 75), width=1)
-
-    winrate = round(wins * 100 / total_games, 1) if total_games else 0
-
-    f_stat_label = _font(12, bold=False)
-    f_stat_val = _font(16)
-
-    rows = [
-        ("Игр", str(total_games), GRAY, GRAY),
-        ("Побед", str(wins), GREEN, GREEN),
-        ("Поражений", str(losses), RED, RED),
-    ]
-    for i, (label, val, lc, vc) in enumerate(rows):
-        ry = sy2 + 52 * SCALE + i * 28 * SCALE
-        draw.text((56 * SCALE, ry), label, fill=lc, font=f_stat_label)
-        draw.text((240 * SCALE, ry), val, fill=vc, font=f_stat_val)
-
-    bar_label_y = sy2 + 140 * SCALE
-    bar_y = sy2 + 160 * SCALE
-    bar_x = 56 * SCALE
-    bar_w = W - 112 * SCALE
-    bar_h = 12 * SCALE
-    draw.text((bar_x, bar_label_y), "Винрейт", fill=PURPLE, font=f_stat_label)
-    draw.text((bar_x + bar_w - 70 * SCALE, bar_label_y), f"{winrate}%", fill=PURPLE2, font=f_stat_val)
-    draw.rounded_rectangle([bar_x, bar_y, bar_x + bar_w, bar_y + bar_h], radius=6 * SCALE, fill=(30, 24, 55))
-    if winrate > 0:
-        fw = max(bar_h, int(bar_w * min(winrate, 100) / 100))
-        _gradient_h(img, (bar_x, bar_y, bar_x + fw, bar_y + bar_h), PURPLE, PINK2)
-        draw = ImageDraw.Draw(img)
-        draw.rounded_rectangle([bar_x, bar_y, bar_x + fw, bar_y + bar_h], radius=6 * SCALE, outline=PURPLE, width=1)
-
-    fin_y = bar_y + bar_h + 24 * SCALE
-    draw.line([(56 * SCALE, fin_y - 8 * SCALE), (W - 56 * SCALE, fin_y - 8 * SCALE)],
-              fill=(40, 30, 75), width=1)
-    draw.text((56 * SCALE, fin_y), "Общие ставки", fill=GRAY, font=f_stat_label)
-    draw.text((bar_x + bar_w - 80 * SCALE, fin_y), f"{total_bet:,}".replace(",", " "), fill=GRAY, font=f_stat_val)
-
-    fin_y2 = fin_y + 28 * SCALE
-    draw.text((56 * SCALE, fin_y2), "Общий выигрыш", fill=GRAY, font=f_stat_label)
-    draw.text((bar_x + bar_w - 80 * SCALE, fin_y2), f"{total_won:,}".replace(",", " "), fill=GOLD, font=f_stat_val)
-
-    if ref_count > 0:
-        fin_y3 = fin_y2 + 28 * SCALE
-        draw.text((56 * SCALE, fin_y3), "Рефералы", fill=GRAY, font=f_stat_label)
-        draw.text((bar_x + bar_w - 80 * SCALE, fin_y3), f"{ref_count}", fill=CYAN, font=f_stat_val)
-        ach_y = fin_y3 + 28 * SCALE
+    if ton:
+        points = [(cx - size, cy - size * .65), (cx + size, cy - size * .65), (cx, cy + size)]
+        draw.line([(x * SCALE, y * SCALE) for x, y in points + [points[0]]],
+                  fill=color, width=2 * SCALE, joint="curve")
+        _line(img, (cx, cy - size * .65, cx, cy + size), color)
     else:
-        ach_y = fin_y2 + 28 * SCALE
-    draw.text((56 * SCALE, ach_y), "Достижения", fill=GRAY, font=f_stat_label)
-    draw.text((bar_x + bar_w - 80 * SCALE, ach_y), f"{ach_count}/{ach_total}", fill=PURPLE2, font=f_stat_val)
+        points = [(cx - size * .55, cy - size * .7), (cx + size * .55, cy - size * .7),
+                  (cx + size, cy - size * .1), (cx, cy + size), (cx - size, cy - size * .1)]
+        draw.polygon([(x * SCALE, y * SCALE) for x, y in points], fill=color)
+        _line(img, (cx - size, cy - size * .1, cx + size, cy - size * .1), (255, 196, 217))
+        _line(img, (cx - size * .55, cy - size * .7, cx, cy + size), (255, 196, 217))
 
-    line_y2 = H - 68 * SCALE
-    draw.line([(60 * SCALE, line_y2), (W - 60 * SCALE, line_y2)], fill=NEON_LINE, width=1)
-    _dot(draw, 60 * SCALE, line_y2, 3 * SCALE, PURPLE)
-    _dot(draw, W - 60 * SCALE, line_y2, 3 * SCALE, PURPLE)
 
-    f_footer = _font(11, bold=False)
-    footer_text = "TON  \u2022  ИГРАЙ  \u2022  ЗАРАБАТЫВАЙ"
-    bbox = draw.textbbox((0, 0), footer_text, font=f_footer)
-    tw = bbox[2] - bbox[0]
-    draw.text(((W - tw) // 2, H - 50 * SCALE), footer_text, fill=(70, 60, 110), font=f_footer)
+def _badge(img, xy, label, color):
+    label = " ".join(str(label).split())
+    label, size = _fit(label, 10, 320, True)
+    x, y = xy
+    background = tuple(round(c * .14 + b * .86) for c, b in zip(color, PANEL))
+    _rect(img, (x, y, x + _width(label, size) + 28, y + 24), background, radius=8)
+    ImageDraw.Draw(img).ellipse(((x + 9) * SCALE, (y + 10) * SCALE,
+                                (x + 13) * SCALE, (y + 14) * SCALE), fill=color)
+    _text(img, (x + 19, y + 7), label, size, color, bold=True)
 
-    sparkles = [
-        (45 * SCALE, 45 * SCALE, 2, (100, 70, 200)),
-        (W - 50 * SCALE, 50 * SCALE, 2, (80, 60, 180)),
-        (55 * SCALE, H - 80 * SCALE, 2, (90, 60, 190)),
-        (W - 55 * SCALE, H - 75 * SCALE, 2, (70, 50, 170)),
-    ]
-    for sx, sy_s, sr, sc in sparkles:
-        _dot(draw, sx, sy_s, sr, sc)
+
+AVATAR_XY = (50, 89, 138, 177)
+
+
+def _avatar_frames(data):
+    """Sample at most ten frames while retaining the source loop duration."""
+    if not data:
+        return [], []
+    try:
+        with Image.open(io.BytesIO(data)) as source:
+            count = getattr(source, "n_frames", 1)
+            indices = {int(i * count / min(count, 10)) for i in range(min(count, 10))}
+            frames, durations = [], []
+            for index in range(count):
+                source.seek(index)
+                if index in indices:
+                    avatar = ImageOps.exif_transpose(source.copy()).convert("RGBA")
+                    frames.append(ImageOps.fit(
+                        avatar, (88 * SCALE, 88 * SCALE), method=Image.Resampling.LANCZOS))
+                    durations.append(0)
+                durations[-1] += max(20, int(source.info.get("duration", 120) or 120))
+            return frames, durations
+    except (OSError, ValueError, EOFError):
+        return [], []
+
+
+def _paste_avatar(img, avatar):
+    x0, y0, x1, y1 = (v * SCALE for v in AVATAR_XY)
+    mask = Image.new("L", (x1 - x0, y1 - y0))
+    ImageDraw.Draw(mask).ellipse((0, 0, mask.width - 1, mask.height - 1), fill=255)
+    patch = Image.alpha_composite(img.crop((x0, y0, x1, y1)).convert("RGBA"), avatar)
+    img.paste(patch.convert("RGB"), (x0, y0), mask)
+
+
+def generate_profile_card(
+    user_id: int, name: str, balance: int, rubies: float,
+    total_games: int, wins: int, losses: int, total_bet: int, total_won: int,
+    ref_count: int = 0, frame: str | None = None, avatar_bytes: bytes | None = None,
+    title: str | None = None, xp: int = 0, ach_count: int = 0, ach_total: int = 0,
+) -> io.BytesIO:
+    from database import level_info, level_name
+
+    img = Image.new("RGB", (W, H), (12, 14, 23))
+    _gradient_panel(img, (16, 16, 584, 764), (25, 25, 43), (17, 21, 32), radius=28)
+    _rect(img, (16, 16, 584, 764), fill=None, radius=28, outline=BORDER)
+    _gem(img, 49, 47, 8, PURPLE, ton=True)
+    _text(img, (66, 40), "TON", 14, WHITE, bold=True)
+    _text(img, (560, 43), "ПРОФИЛЬ ИГРОКА", 10, MUTED, align="right")
+    _line(img, (40, 69, 560, 69))
+
+    ring_color = FRAME_COLORS.get(frame, PURPLE)
+    draw = ImageDraw.Draw(img)
+    draw.ellipse((45 * SCALE, 84 * SCALE, 143 * SCALE, 182 * SCALE),
+                 outline=ring_color, width=2 * SCALE)
+    draw.ellipse(tuple(v * SCALE for v in AVATAR_XY), fill=(40, 37, 64))
+    clean_name = " ".join((name or "Игрок").split()) or "Игрок"
+    frames, durations = _avatar_frames(avatar_bytes)
+    if not frames:
+        _text(img, (94, 116), clean_name[:1].upper(), 36, PURPLE, bold=True, align="center")
+    _text(img, (160, 96), clean_name, 30, bold=True, max_width=395, min_size=20)
+    if title:
+        title_label, title_color = TITLE_DISPLAY.get(title, (title, PURPLE))
+        _badge(img, (160, 137), title_label, title_color)
+    else:
+        _text(img, (160, 143), "Личный профиль", 12, MUTED)
+    _text(img, (160, 172), f"ID  {user_id}", 11, DIM, max_width=395)
+
+    li = level_info(xp)
+    _rect(img, (40, 202, 560, 274), fill=(29, 29, 47), outline=BORDER)
+    _text(img, (58, 219), f"Уровень {li['level']}", 15, bold=True, max_width=145, min_size=12)
+    _text(img, (212, 222), level_name(li["level"]), 12, PURPLE, max_width=110)
+    level_xp = max(0, xp - li["current_level_xp"])
+    level_target = li["next_level_xp"] - li["current_level_xp"]
+    _text(img, (542, 222), f"{format_number(level_xp)} / {format_number(level_target)} XP",
+          11, MUTED, align="right", max_width=205, min_size=8)
+    _progress(img, (58, 250, 542, 256), li["progress"])
+
+    _gradient_panel(img, (40, 292, 376, 407), (48, 38, 77), (31, 31, 50))
+    _rect(img, (40, 292, 376, 407), fill=None, outline=(67, 56, 97))
+    _gem(img, 66, 320, 8, PURPLE, ton=True)
+    _text(img, (84, 315), "БАЛАНС · TON", 10, (191, 175, 228), bold=True)
+    _text(img, (58, 350), format_number(balance), 38, bold=True, max_width=300, min_size=18)
+    _gradient_panel(img, (390, 292, 560, 407), (44, 30, 48), (30, 27, 43))
+    _rect(img, (390, 292, 560, 407), fill=None, outline=(66, 43, 62))
+    _gem(img, 415, 320, 8, PINK)
+    _text(img, (433, 315), "РУБИНЫ", 10, (220, 164, 190), bold=True)
+    _text(img, (408, 350), format_number(rubies), 38, PINK, bold=True, max_width=134, min_size=10)
+
+    _text(img, (40, 431), "Статистика", 20, bold=True)
+    _text(img, (560, 438), "ЗА ВСЁ ВРЕМЯ", 9, DIM, align="right")
+    _rect(img, (40, 465, 560, 539), fill=PANEL)
+    for index, (label, value, color) in enumerate([
+        ("Всего игр", total_games, WHITE), ("Победы", wins, GREEN), ("Поражения", losses, PINK),
+    ]):
+        x = 58 + index * 174
+        _text(img, (x, 479), label, 11, MUTED)
+        _text(img, (x, 501), format_number(value), 25, color, bold=True, max_width=140, min_size=10)
+        if index:
+            _line(img, (x - 20, 481, x - 20, 524))
+
+    winrate = wins * 100 / total_games if total_games else 0
+    _text(img, (40, 557), "Доля побед", 12, MUTED)
+    _text(img, (560, 553), f"{winrate:.1f}%", 18, PURPLE, bold=True, align="right", max_width=180)
+    _progress(img, (40, 580, 560, 586), winrate / 100)
+    for y, label, value, color in [
+        (609, "Общие ставки", total_bet, WHITE),
+        (640, "Общий выигрыш", total_won, (236, 208, 150)),
+    ]:
+        _text(img, (40, y), label, 13, MUTED)
+        _text(img, (560, y - 1), f"{format_number(value)} TON", 15, color,
+              bold=True, align="right", max_width=320, min_size=10)
+
+    _rect(img, (40, 677, 560, 730), fill=PANEL)
+    _text(img, (56, 689), "Достижения", 11, MUTED)
+    _text(img, (200, 687), f"{ach_count} / {ach_total}", 14, PURPLE,
+          bold=True, max_width=70, align="right", min_size=10)
+    _progress(img, (56, 712, 200, 716), ach_count / ach_total if ach_total else 0)
+    _line(img, (226, 689, 226, 718))
+    _text(img, (246, 698), "Приглашено друзей", 11, MUTED)
+    _text(img, (542, 694), format_number(ref_count), 19, WHITE,
+          bold=True, align="right", max_width=175, min_size=10)
+    _text(img, (300, 746), "TON  /  ТВОЯ ИГРОВАЯ СТАТИСТИКА", 8, DIM, align="center")
 
     buf = io.BytesIO()
-
-    if avatar_is_gif and len(avatar_frames) > 1:
-        NUM_ANIM_FRAMES = min(len(avatar_frames), 10)
-        frame_indices = [int(i * len(avatar_frames) / NUM_ANIM_FRAMES) for i in range(NUM_ANIM_FRAMES)]
-        gif_frames = []
-        circle_mask = Image.new("L", (avatar_r * 2, avatar_r * 2), 0)
-        ImageDraw.Draw(circle_mask).ellipse([0, 0, avatar_r * 2 - 1, avatar_r * 2 - 1], fill=255)
-
-        for fi in frame_indices:
-            frame_img = img.copy().convert("RGBA")
-            av_frame = avatar_frames[fi]
-            avatar_layer = Image.new("RGBA", frame_img.size, (0, 0, 0, 0))
-            avatar_layer.paste(av_frame, (avatar_cx - avatar_r, avatar_cy - avatar_r), circle_mask)
-            frame_img = Image.alpha_composite(frame_img, avatar_layer)
-
-            pulse_t = fi / NUM_ANIM_FRAMES
-            pulse = 0.5 + 0.5 * math.sin(2 * math.pi * pulse_t)
-            glow_r = int(avatar_r + 3 * SCALE + pulse * 8 * SCALE)
-            glow_alpha = int(30 + pulse * 40)
-            glow_layer = Image.new("RGBA", frame_img.size, (0, 0, 0, 0))
-            gd = ImageDraw.Draw(glow_layer)
-            for i in range(16, 0, -1):
-                a = int(glow_alpha * (1 - i / 16))
-                gd.ellipse(
-                    [avatar_cx - glow_r - i, avatar_cy - glow_r - i,
-                     avatar_cx + glow_r + i, avatar_cy + glow_r + i],
-                    fill=GLOW + (a,),
-                )
-            frame_img = Image.alpha_composite(frame_img, glow_layer)
-            fd = ImageDraw.Draw(frame_img)
-            fd.ellipse(
-                [avatar_cx - avatar_r - 3 * SCALE, avatar_cy - avatar_r - 3 * SCALE,
-                 avatar_cx + avatar_r + 3 * SCALE, avatar_cy + avatar_r + 3 * SCALE],
-                outline=PURPLE2, width=3 * SCALE,
-            )
-            fd.ellipse(
-                [avatar_cx - avatar_r - 1 * SCALE, avatar_cy - avatar_r - 1 * SCALE,
-                 avatar_cx + avatar_r + 1 * SCALE, avatar_cy + avatar_r + 1 * SCALE],
-                outline=(180, 140, 255), width=1 * SCALE,
-            )
-            gif_frames.append(frame_img.convert("RGB"))
-
-        gif_frames[0].save(
-            buf, format="GIF", save_all=True, append_images=gif_frames[1:],
-            duration=120, loop=0, optimize=False,
-        )
+    if len(frames) > 1:
+        rendered = []
+        for avatar in frames:
+            image = img.copy()
+            _paste_avatar(image, avatar)
+            rendered.append(image)
+        # A shared palette keeps the card stable and includes every avatar colour.
+        samples = Image.new("RGB", (150 * len(rendered), 195))
+        for index, image in enumerate(rendered):
+            samples.paste(image.resize((150, 195), Image.Resampling.LANCZOS), (150 * index, 0))
+        palette = samples.quantize(colors=256)
+        rendered = [image.quantize(palette=palette, dither=Image.Dither.NONE) for image in rendered]
+        rendered[0].save(buf, format="GIF", save_all=True, append_images=rendered[1:],
+                         duration=durations, loop=0, optimize=False, disposal=1)
     else:
+        if frames:
+            _paste_avatar(img, frames[0])
         img.save(buf, format="PNG", optimize=False)
-
     buf.seek(0)
     return buf
