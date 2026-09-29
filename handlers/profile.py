@@ -1,9 +1,10 @@
 from aiogram import Router, F
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+import asyncio
 import logging
 import urllib.request
 import ssl
@@ -15,6 +16,7 @@ from database import db
 from keyboards.common import back_button
 from utils.helpers import balance_text
 from utils.profile_card import generate_profile_card
+from utils.achievement_card import generate_achievements_card
 
 router = Router()
 log = logging.getLogger(__name__)
@@ -196,27 +198,48 @@ def _ach_kb():
     return kb.as_markup()
 
 
+async def _send_achievements_card(message: Message, user: dict) -> bool:
+    try:
+        owned = db.get_achievements(user["id"])
+        card = await asyncio.to_thread(
+            generate_achievements_card,
+            user_id=user["id"],
+            name=user["first_name"] or "Игрок",
+            owned=owned,
+        )
+        photo = BufferedInputFile(
+            card.getvalue(), filename=f"achievements_{user['id']}.png"
+        )
+        await message.answer_photo(photo=photo, reply_markup=_ach_kb())
+    except Exception:
+        log.exception("Failed to send achievements card for %s", user["id"])
+        await message.answer(
+            "Не удалось загрузить карточку достижений. Попробуйте ещё раз чуть позже."
+        )
+        return False
+    return True
+
+
 @router.message(Command("achievements"))
 async def achievements_command(message: Message):
-    from utils.achievements import achievements_text
-    check_user = db.get_user(message.from_user.id)
-    if not check_user:
+    user = db.get_user(message.from_user.id)
+    if not user:
         await message.answer("Сначала нажмите /start")
         return
-    await message.answer(achievements_text(message.from_user.id), reply_markup=_ach_kb())
+    await _send_achievements_card(message, user)
 
 
 @router.callback_query(F.data == "achievements", StateFilter("*"))
 async def achievements_callback(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.answer()
-    from utils.achievements import achievements_text
     user = db.get_user(callback.from_user.id)
     if not user:
-        await callback.message.edit_text("Используйте /start")
+        await callback.message.answer("Используйте /start")
+        return
+    if not await _send_achievements_card(callback.message, user):
         return
     try:
         await callback.message.delete()
     except Exception:
         pass
-    await callback.message.answer(achievements_text(callback.from_user.id), reply_markup=_ach_kb())
