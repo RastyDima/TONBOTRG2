@@ -122,7 +122,7 @@ def cashout_game(user_id: int):
     if not entry:
         return None
     game = entry["game"]
-    if game.is_over:
+    if game.is_over or not getattr(game, "can_cashout", True):
         return None
     game.cashed_out = True
     payout = game.payout
@@ -145,7 +145,9 @@ def lose_game(user_id: int):
     if not entry:
         return None
     game = entry["game"]
-    if game.is_over:
+    # Some games mark themselves lost when the losing move is revealed.
+    # The registry entry, not that flag, determines whether settlement is pending.
+    if game.cashed_out:
         return None
     game.lost = True
     _process_referral_bet(user_id, game.bet)

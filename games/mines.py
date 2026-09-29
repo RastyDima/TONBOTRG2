@@ -1,7 +1,9 @@
+import math
 import random
 import secrets
 from math import comb
 
+from config import MAX_GAME_MULTIPLIER
 from database import db
 
 FIELD_SIZE = 25
@@ -12,10 +14,12 @@ MAX_MINES = 10
 
 
 def get_house_edge() -> float:
+    """Legacy setting name: payout as a fraction of mathematically fair odds."""
     try:
-        return float(db.get_setting("mines_house_edge", 0.97))
+        value = float(db.get_setting("mines_house_edge", 0.94))
     except (TypeError, ValueError):
-        return 0.97
+        value = 0.94
+    return max(0.1, min(value, 0.94)) if math.isfinite(value) else 0.94
 
 
 class MinesGame:
@@ -51,12 +55,16 @@ class MinesGame:
         return FIELD_SIZE - self.mines
 
     @property
+    def can_cashout(self) -> bool:
+        return self.safe_revealed > 0 and self.multiplier > 1.0 and not self.is_over
+
+    @property
     def multiplier(self) -> float:
         k = self.safe_revealed
         if k == 0:
             return 1.0
         p = comb(FIELD_SIZE - k, self.mines) / comb(FIELD_SIZE, self.mines)
-        return round(get_house_edge() / p, 2)
+        return min(MAX_GAME_MULTIPLIER, round(get_house_edge() / p, 2))
 
     @property
     def payout(self) -> int:

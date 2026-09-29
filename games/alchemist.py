@@ -1,4 +1,8 @@
+import secrets
+
 # Ингредиенты алхимической лаборатории: (эмодзи, название)
+TARGET_RETURN = 0.94
+
 INGREDIENTS = [
     ("🌿", "Тёмная трава"),
     ("🧪", "Эссенция"),
@@ -32,7 +36,7 @@ INGREDIENT_COUNT = len(INGREDIENTS)
 
 
 class AlchemistGame:
-    """Игра «Алхимик»: выбери 2 ингредиента и получи заранее известное зелье."""
+    """Recipe determines the prize; a hidden roll determines whether it succeeds."""
 
     def __init__(self, user_id: int, bet: int):
         self.type = "alchemist"
@@ -40,6 +44,7 @@ class AlchemistGame:
         self.bet = bet
         self.picks: list[int] = []
         self.result = None
+        self.success = False
         self.lost = False
         self.cashed_out = False
 
@@ -64,12 +69,15 @@ class AlchemistGame:
             return None
         if self.result is None:
             self.result = RECIPES.get(frozenset(self.picks))
+            if self.result and self.result[2]:
+                threshold = int(10_000 * TARGET_RETURN / self.result[2])
+                self.success = secrets.randbelow(10_000) < threshold
         return self.result
 
     @property
     def multiplier(self) -> float:
         result = self.resolve()
-        if not result or result[2] is None:
+        if not result or not self.success:
             return 0.0
         return result[2]
 

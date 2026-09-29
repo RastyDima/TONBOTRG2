@@ -7,8 +7,9 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from config import MAX_BET
 from database import db
-from games.alchemist import INGREDIENTS, INGREDIENT_COUNT, AlchemistGame
+from games.alchemist import INGREDIENTS, INGREDIENT_COUNT, TARGET_RETURN, AlchemistGame
 from keyboards.common import back_button, cancel_kb
 from utils.game_registry import (
     cancel_game,
@@ -61,7 +62,10 @@ def pick_text(game, has_bet: bool = False) -> str:
             lines.append(f"  {emoji} {name}")
         lines.append("\n🪄 Выберите <b>второй</b> ингредиент:")
     else:
-        lines.append("🪄 Лаборатория ждёт.\nВыберите <b>первый</b> ингредиент из шести:")
+        lines.append(
+            f"🪄 Лаборатория ждёт. Шанс успеха = {TARGET_RETURN:.0%} / множитель зелья.\n"
+            "Выберите <b>первый</b> ингредиент из шести:"
+        )
     return "\n".join(lines)
 
 
@@ -171,7 +175,7 @@ async def alchemist_pick(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         await callback.message.edit_text(
             f"⚗️ <b>Алхимик</b> · {INGREDIENTS[idx][0]} {INGREDIENTS[idx][1]}\n\n"
-            f"Введите сумму ставки (целое число):",
+            f"Введите ставку от 1 до {format_number(MAX_BET)}:",
             reply_markup=cancel_kb(),
         )
         return
@@ -230,7 +234,7 @@ async def alchemist_process_bet(message: Message, state: FSMContext):
     first_pick = data.get("first_pick")
     bet = parse_bet(message.text)
     if bet is None:
-        await message.answer("❌ Некорректная сумма. Введите целое число от 1:")
+        await message.answer(f"❌ Введите ставку от 1 до {format_number(MAX_BET)}:")
         return
     user = db.get_user(message.from_user.id)
     if not user:
@@ -287,6 +291,9 @@ async def finish_mix(callback: CallbackQuery, game) -> None:
 
 @router.callback_query(F.data == "alch_cancel", StateFilter("*"))
 async def alchemist_cancel(callback: CallbackQuery):
-    cancel_game(callback.from_user.id)
+    game = cancel_game(callback.from_user.id)
     await callback.answer()
-    await callback.message.edit_text("❌ Игра отменена. Ставка возвращена на баланс.")
+    await callback.message.edit_text(
+        "❌ Игра отменена. Ставка возвращена на баланс."
+        if game else "Игра уже завершена. Возврата ставки нет."
+    )

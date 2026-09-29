@@ -1,8 +1,7 @@
-"""Монетка — орёл/решка, ×2."""
-import hashlib
-import hmac
-import random
-import time
+"""Монетка — орёл/решка с небольшим преимуществом банка."""
+import secrets
+
+PAYOUT_MULTIPLIER = 1.85
 
 
 class CoinFlipGame:
@@ -14,16 +13,13 @@ class CoinFlipGame:
         self.result: str | None = None
         self.won = False
         self.payout = 0
-        self.seed = hmac.new(
-            b"coinflip", f"{user_id}:{time.time()}:{random.random()}".encode(),
-            hashlib.sha256,
-        ).hexdigest()[:16]
+        self.seed = secrets.token_hex(8)
 
     def flip(self, choice: str) -> str:
         self.choice = choice
-        self.result = random.choice(["орёл", "решка"])
+        self.result = secrets.choice(["орёл", "решка"])
         self.won = self.result == choice
-        self.payout = self.bet * 2 if self.won else 0
+        self.payout = int(self.bet * PAYOUT_MULTIPLIER) if self.won else 0
         return self.result
 
     @property
@@ -32,4 +28,4 @@ class CoinFlipGame:
 
     @property
     def multiplier(self) -> float:
-        return 2.0 if self.won else 0
+        return PAYOUT_MULTIPLIER if self.won else 0

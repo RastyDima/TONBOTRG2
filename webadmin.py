@@ -5,13 +5,14 @@
 """
 import html
 import logging
+import math
 import secrets
 import time
 from collections import defaultdict
 
 from aiohttp import web
 
-from config import ADMIN_PANEL_PASSWORD, ADMIN_PANEL_USER
+from config import ADMIN_PANEL_PASSWORD, ADMIN_PANEL_USER, MAX_BET, MAX_GAME_MULTIPLIER
 from database import db
 from games.joker import get_joker_levels
 from games.mines import get_house_edge
@@ -437,6 +438,7 @@ async def settings_page(request: web.Request) -> web.Response:
     body = f"""
 <div class="page-title">⚠️ Настройки</div>
 <div class="page-sub">Коэффициенты игр. Применяются сразу, без перезапуска бота.</div>
+<p class="hint">Максимальная ставка: {format_number(MAX_BET)} TON. Максимальный множитель в «Минах» и «Джокере»: ×{MAX_GAME_MULTIPLIER:g}.</p>
 
 {f'<div class="warn-banner" style="border-color:rgba(16,185,129,.4)"><span style="font-size:18px">✅</span><span><b>База данных сброшена.</b> Все балансы и статистика обнулены.</span></div>' if request.query.get("resetted") else ''}
 
@@ -448,16 +450,16 @@ async def settings_page(request: web.Request) -> web.Response:
 <form method="post" action="/admin/settings">
 <div class="card">
   <h2>🎮 Мины</h2>
-  <p class="hint">House edge — доля, которую забирает бот от «честных» шансов (0.1 – 2.0). <b>Выше = бот зарабатывает больше.</b></p>
-  {_field("mines_house_edge", "House edge (доля заведения)", current["mines_house_edge"], "0.01", "0.1", "2", "Пример: 0.97 — бот оставляет себе 3% от честного множителя.")}
+  <p class="hint">Доля честной выплаты (0.1–0.94). Чем выше значение, тем больше получают игроки.</p>
+  {_field("mines_house_edge", "Доля выплаты", current["mines_house_edge"], "0.01", "0.1", "0.94", "Пример: 0.94 — выплата составляет 94% от честного множителя.")}
 </div>
 
 <div class="card">
   <h2>🃏 Джокер</h2>
   <p class="hint">Множитель, который накапливается за каждую удачно открытую дверь.</p>
   <div class="settings-grid">
-    <div>{_field("joker_mult_1", "💀 Уровень 1 — 1 скелет", current["joker_mult_1"], "0.1", "1", "20", "Рекомендуемо 1.0 – 2.0")}</div>
-    <div>{_field("joker_mult_2", "💀 Уровень 2 — 2 скелета", current["joker_mult_2"], "0.1", "1", "50", "Рекомендуемо 2.0 – 5.0")}</div>
+    <div>{_field("joker_mult_1", "💀 Уровень 1 — 1 скелет", current["joker_mult_1"], "0.1", "1", "1.4", "Максимум ×1.4 при шансе 2 из 3.")}</div>
+    <div>{_field("joker_mult_2", "💀 Уровень 2 — 2 скелета", current["joker_mult_2"], "0.1", "1", "2.8", "Максимум ×2.8 при шансе 1 из 3.")}</div>
   </div>
 </div>
 
@@ -514,7 +516,8 @@ async def save_settings(request: web.Request) -> web.Response:
     def _parse(name: str) -> float | None:
         raw = form.get(name, "")
         try:
-            return float(raw.replace(",", "."))
+            value = float(raw.replace(",", "."))
+            return value if math.isfinite(value) else None
         except (TypeError, ValueError):
             return None
 
@@ -533,11 +536,11 @@ async def save_settings(request: web.Request) -> web.Response:
         "weekly_bonus": _parse_int("weekly_bonus"),
     }
     ok = True
-    if not vals["mines_house_edge"] or not 0.1 <= vals["mines_house_edge"] <= 2:
+    if not vals["mines_house_edge"] or not 0.1 <= vals["mines_house_edge"] <= 0.94:
         ok = False
-    if not vals["joker_mult_1"] or vals["joker_mult_1"] < 1:
+    if not vals["joker_mult_1"] or not 1 <= vals["joker_mult_1"] <= 1.4:
         ok = False
-    if not vals["joker_mult_2"] or vals["joker_mult_2"] < 1:
+    if not vals["joker_mult_2"] or not 1 <= vals["joker_mult_2"] <= 2.8:
         ok = False
     if vals["daily_bonus"] is None or not 0 <= vals["daily_bonus"] <= 10 ** 12:
         ok = False

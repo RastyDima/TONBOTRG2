@@ -1,8 +1,5 @@
 """Рубиновая рулетка: ставка рубинами, 3 сектора."""
-import hashlib
-import hmac
-import random
-import time
+import secrets
 
 SECTORS = [
     {"name": "Красный", "emoji": "🔴", "mult": 2, "weight": 24},
@@ -20,13 +17,10 @@ class RubyRouletteGame:
         self.result: dict | None = None
         self.won = False
         self.payout = 0
-        self.seed = hmac.new(
-            b"ruby_roulette", f"{user_id}:{time.time()}:{random.random()}".encode(),
-            hashlib.sha256,
-        ).hexdigest()[:16]
+        self.seed = secrets.token_hex(8)
 
     def spin(self, choice: str) -> dict:
-        roll = random.randint(1, TOTAL_WEIGHT)
+        roll = secrets.randbelow(TOTAL_WEIGHT) + 1
         acc = 0
         winner = SECTORS[0]
         for s in SECTORS:

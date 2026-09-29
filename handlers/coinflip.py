@@ -5,8 +5,9 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from config import MAX_BET
 from database import db
-from games.coinflip import CoinFlipGame
+from games.coinflip import CoinFlipGame, PAYOUT_MULTIPLIER
 from keyboards.common import back_button, cancel_kb
 from utils.game_registry import GAME_XP_PLAY, GAME_XP_WIN, award_progress, progress_text, registry
 from utils.helpers import format_number, parse_bet, quick_command
@@ -26,8 +27,8 @@ class CoinFlipStates(StatesGroup):
 
 def choice_kb():
     kb = InlineKeyboardBuilder()
-    kb.button(text="🪙 Орёл (×2)", callback_data="cf_pick:орёл")
-    kb.button(text="🪙 Решка (×2)", callback_data="cf_pick:решка")
+    kb.button(text=f"🪙 Орёл (×{PAYOUT_MULTIPLIER})", callback_data="cf_pick:орёл")
+    kb.button(text=f"🪙 Решка (×{PAYOUT_MULTIPLIER})", callback_data="cf_pick:решка")
     kb.adjust(2)
     kb.row(back_button("menu_games"))
     return kb.as_markup()
@@ -40,7 +41,7 @@ def result_text(game: CoinFlipGame, user_balance: int) -> str:
             f"🪙 <b>Монетка</b>\n\n"
             f"Выпало: <b>{game.result.upper()}</b> {coin}\n\n"
             f"🎉 <b>Победа!</b>\n"
-            f"Множитель: ×2\n"
+            f"Множитель: ×{PAYOUT_MULTIPLIER}\n"
             f"Выигрыш: <b>{format_number(game.payout)}</b> TON "
             f"(+{format_number(game.payout - game.bet)})\n\n"
             f"💳 Баланс: {format_number(user_balance)}"
@@ -63,11 +64,11 @@ async def coinflip_menu(callback: CallbackQuery, state: FSMContext):
     await state.set_state(CoinFlipStates.bet)
     await callback.answer()
     await callback.message.edit_text(
-        "🪙 <b>Монетка</b>\n\n"
-        "Выберите сторону:\n"
-        "🪙 <b>Орёл</b> — ×2\n"
-        "🪙 <b>Решка</b> — ×2\n\n"
-        "Введите сумму ставки (TON):",
+        f"🪙 <b>Монетка</b>\n\n"
+        f"Выберите сторону:\n"
+        f"🪙 <b>Орёл</b> — ×{PAYOUT_MULTIPLIER}\n"
+        f"🪙 <b>Решка</b> — ×{PAYOUT_MULTIPLIER}\n\n"
+        f"Введите ставку от 1 до {format_number(MAX_BET)} TON:",
         reply_markup=cancel_kb(),
     )
 
@@ -111,7 +112,7 @@ async def coinflip_process_bet(message: Message, state: FSMContext):
         return
     bet = parse_bet(message.text)
     if bet is None:
-        await message.answer("❌ Некорректная сумма. Введите целое число от 1:")
+        await message.answer(f"❌ Введите ставку от 1 до {format_number(MAX_BET)} TON:")
         return
     user = db.get_user(message.from_user.id)
     if not user:

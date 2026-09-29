@@ -5,6 +5,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from config import MAX_BET, MAX_GAME_MULTIPLIER
 from database import db
 from games.joker import BUTTONS, JokerGame, get_joker_levels
 from keyboards.common import back_button, cancel_kb
@@ -68,11 +69,10 @@ def field_kb(game):
     for i in range(BUTTONS):
         kb.button(text=f"🚪 {i + 1}", callback_data=f"joker_pick:{i}")
     kb.adjust(BUTTONS)
-    kb.row(
-        InlineKeyboardButton(
+    if game.can_cashout:
+        kb.row(InlineKeyboardButton(
             text=f"💰 Забрать {format_number(game.payout)}", callback_data="joker_cashout"
-        )
-    )
+        ))
     kb.row(InlineKeyboardButton(text="❌ Отмена", callback_data="joker_cancel"))
     return kb.as_markup()
 
@@ -111,8 +111,8 @@ async def joker_level_menu(callback: CallbackQuery):
         return
     await callback.message.edit_text(
         "🃏 <b>Джокер</b>\nВыберите уровень риска:\n"
-        "💀 1 — низкий риск, множитель ×1.6\n"
-        "💀 2 — высокий риск, множитель ×3.5",
+        f"💀 1 — низкий риск, множитель ×{get_joker_levels()[1]['mult']}\n"
+        f"💀 2 — высокий риск, множитель ×{get_joker_levels()[2]['mult']}",
         reply_markup=levels_kb(),
     )
 
@@ -134,8 +134,8 @@ async def joker_choose_level(callback: CallbackQuery, state: FSMContext):
             await callback.answer("❌ Недостаточно средств.", show_alert=True)
             await callback.message.edit_text(
                 "🃏 <b>Джокер</b>\nВыберите уровень риска:\n"
-                "💀 1 — низкий риск, множитель ×1.6\n"
-                "💀 2 — высокий риск, множитель ×3.5",
+                f"💀 1 — низкий риск, множитель ×{get_joker_levels()[1]['mult']}\n"
+                f"💀 2 — высокий риск, множитель ×{get_joker_levels()[2]['mult']}",
                 reply_markup=levels_kb(),
             )
             return
@@ -150,7 +150,7 @@ async def joker_choose_level(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await callback.message.edit_text(
         f"🃏 <b>Джокер</b> · Уровень {level} · 💀 {cfg['skulls']} · ×{cfg['mult']} за дверь\n\n"
-        f"Введите сумму ставки (целое число):",
+        f"Введите ставку от 1 до {format_number(MAX_BET)}:",
         reply_markup=cancel_kb(),
     )
 
@@ -195,7 +195,7 @@ async def joker_process_bet(message: Message, state: FSMContext):
     level = data.get("level")
     bet = parse_bet(message.text)
     if bet is None:
-        await message.answer("❌ Некорректная сумма. Введите целое число от 1:")
+        await message.answer(f"❌ Введите ставку от 1 до {format_number(MAX_BET)}:")
         return
     user = db.get_user(message.from_user.id)
     if not user:
@@ -234,6 +234,13 @@ async def joker_pick(callback: CallbackQuery):
         level_msg = progress_text(result[1]) if result else ""
         await callback.message.edit_text(lose_text(game) + level_msg, reply_markup=None)
         return
+    if game.multiplier >= MAX_GAME_MULTIPLIER:
+        result = cashout_game(user_id)
+        if result:
+            game, payout, progress = result
+            await callback.answer("Максимальный множитель достигнут!")
+            await callback.message.edit_text(win_text(game) + progress_text(progress), reply_markup=None)
+        return
     await callback.answer(f"Множитель: {game.multiplier}x")
     await callback.message.edit_text(field_text(game), reply_markup=field_kb(game))
 
@@ -242,7 +249,7 @@ async def joker_pick(callback: CallbackQuery):
 async def joker_cashout(callback: CallbackQuery):
     result = cashout_game(callback.from_user.id)
     if not result:
-        await callback.answer("Игра не найдена. Начните новую.", show_alert=True)
+        await callback.answer("Сначала откройте безопасную дверь или начните новую игру.", show_alert=True)
         return
     game, payout, progress = result
     level_msg = progress_text(progress)
@@ -258,6 +265,9 @@ async def joker_cashout(callback: CallbackQuery):
 
 @router.callback_query(F.data == "joker_cancel", StateFilter("*"))
 async def joker_cancel(callback: CallbackQuery):
-    cancel_game(callback.from_user.id)
+    game = cancel_game(callback.from_user.id)
     await callback.answer()
-    await callback.message.edit_text("❌ Игра отменена. Ставка возвращена на баланс.")
+    await callback.message.edit_text(
+        "❌ Игра отменена. Ставка возвращена на баланс."
+        if game else "Игра уже завершена. Возврата ставки нет."
+    )
