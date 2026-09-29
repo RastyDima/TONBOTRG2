@@ -129,6 +129,55 @@ class GameBalanceTests(unittest.TestCase):
         self.assertEqual(game.multiplier, MAX_GAME_MULTIPLIER)
         self.assertEqual(game.payout, 2_000_000)
 
+    def test_joker_can_switch_risk_between_rounds(self):
+        game = JokerGame(991234, 100, 1)
+        game.skull_pos = {2}
+        self.assertEqual(game.pick(0), "safe")
+        self.assertEqual(game.payout, 140)
+        self.assertEqual(game.rounds[0]["level"], 1)
+
+        self.assertTrue(game.set_level(2))
+        self.assertEqual(game.skulls, 2)
+        self.assertEqual(game.next_payout, 392)
+        game.skull_pos = {1, 2}
+        self.assertEqual(game.pick(0), "safe")
+        self.assertEqual(game.rounds[1]["level"], 2)
+        self.assertEqual(game.payout, 392)
+        self.assertFalse(game.set_level(3))
+
+        game.skull_pos = {0, 2}
+        self.assertEqual(game.pick(0), "skull")
+        self.assertFalse(game.set_level(1))
+
+    def test_joker_each_risk_has_house_edge(self):
+        levels = get_joker_levels()
+        for cfg in levels.values():
+            success_chance = (3 - cfg["skulls"]) / 3
+            self.assertLess(success_chance * cfg["mult"], 1)
+
+    def test_joker_rejects_stale_round_buttons(self):
+        from handlers.joker import joker_change_risk, joker_pick
+
+        game = JokerGame(991234, 100, 1)
+        self.assertTrue(registry.register(991234, "joker", game))
+
+        class FakeUser:
+            id = 991234
+
+        class FakeCallback:
+            from_user = FakeUser()
+            data = "joker_risk:0:2"
+
+            async def answer(self, text, **kwargs):
+                assert text and kwargs.get("show_alert")
+
+        callback = FakeCallback()
+        asyncio.run(joker_change_risk(callback))
+        self.assertEqual(game.level, 1)
+        callback.data = "joker_pick:0:0"
+        asyncio.run(joker_pick(callback))
+        self.assertEqual(game.rounds, [])
+
     def test_mines_rejects_out_of_field_callback(self):
         from handlers.mines import mines_reveal
 

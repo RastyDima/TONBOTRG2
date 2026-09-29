@@ -38,6 +38,7 @@ class JokerGame:
             raise ValueError("Некорректный уровень риска")
         cfg = levels[level]
         self.type = "joker"
+        self.levels = levels
         self.user_id = user_id
         self.bet = bet
         self.level = level
@@ -63,17 +64,39 @@ class JokerGame:
     def can_cashout(self) -> bool:
         return self.round > 1 and not self.is_over
 
+    @property
+    def next_multiplier(self) -> float:
+        return min(MAX_GAME_MULTIPLIER, round(self.multiplier * self.round_multiplier, 2))
+
+    @property
+    def next_payout(self) -> int:
+        return int(self.bet * self.next_multiplier)
+
+    def set_level(self, level: int) -> bool:
+        """Choose the risk for the current unopened round."""
+        if self.is_over or level not in self.levels:
+            return False
+        if level == self.level:
+            return True
+        self.level = level
+        cfg = self.levels[level]
+        self.skulls = cfg["skulls"]
+        self.round_multiplier = cfg["mult"]
+        self.skull_pos = set(secrets.SystemRandom().sample(range(BUTTONS), self.skulls))
+        return True
+
     def pick(self, pos: int) -> str:
         """Открывает дверь pos (0..BUTTONS-1). Возвращает 'safe' или 'skull'."""
         self.last_pick_pos = pos
         skull = pos in self.skull_pos
         self.rounds.append(
-            {"skull_pos": set(self.skull_pos), "picked": pos, "result": "skull" if skull else "safe"}
+            {"skull_pos": set(self.skull_pos), "picked": pos,
+             "result": "skull" if skull else "safe", "level": self.level}
         )
         if skull:
             self.lost = True
             return "skull"
-        self.multiplier = min(MAX_GAME_MULTIPLIER, round(self.multiplier * self.round_multiplier, 2))
+        self.multiplier = self.next_multiplier
         self.round += 1
         self.skull_pos = set(secrets.SystemRandom().sample(range(BUTTONS), self.skulls))
         return "safe"

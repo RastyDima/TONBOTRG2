@@ -50,25 +50,37 @@ def levels_kb():
 
 def field_text(game) -> str:
     text = (
-        f"🃏 <b>Джокер</b> · Уровень {game.level} · 💀 {game.skulls} · ×{game.round_multiplier} за дверь\n"
-        f"Раунд: {game.round} · Ставка: {format_number(game.bet)}\n"
+        f"🃏 <b>Джокер</b> · Раунд {game.round}\n"
+        f"Ставка: {format_number(game.bet)}\n"
     )
     for i, rd in enumerate(game.rounds, 1):
-        text += f"\n🏁 Раунд {i}:\n{game.reveal_line(rd)}\n"
+        text += f"\n🏁 Раунд {i} · риск {rd['level']}:\n{game.reveal_line(rd)}\n"
     text += (
-        f"\n➡️ Раунд {game.round}:\n{game.hidden_line()}\n\n"
-        f"В трёх дверях спрятано 💀 <b>{game.skulls}</b> скелета(ов).\n\n"
-        f"💰 Множитель: <b>{game.multiplier}x</b>\n"
-        f"Выигрыш: <b>{format_number(game.payout)}</b>"
+        f"\n➡️ Выберите риск и откройте дверь:\n{game.hidden_line()}\n\n"
+        f"💀 {game.skulls} из 3 · шанс пройти <b>{(BUTTONS - game.skulls) / BUTTONS:.0%}</b>\n"
+        f"Удачный ход: ×{game.next_multiplier} · <b>{format_number(game.next_payout)}</b>\n\n"
+        f"💰 Текущий множитель: <b>×{game.multiplier}</b>"
     )
+    if game.can_cashout:
+        text += f"\nМожно забрать: <b>{format_number(game.payout)}</b>"
     return text
 
 
 def field_kb(game):
     kb = InlineKeyboardBuilder()
-    for i in range(BUTTONS):
-        kb.button(text=f"🚪 {i + 1}", callback_data=f"joker_pick:{i}")
-    kb.adjust(BUTTONS)
+    levels = game.levels
+    kb.row(*(
+        InlineKeyboardButton(
+            text=f"{'✅ ' if game.level == lvl else ''}{'🛡' if lvl == 1 else '🔥'} "
+                 f"{BUTTONS - levels[lvl]['skulls']}/3 · ×{levels[lvl]['mult']}",
+            callback_data=f"joker_risk:{game.round}:{lvl}",
+        )
+        for lvl in (1, 2)
+    ))
+    kb.row(*(
+        InlineKeyboardButton(text=f"🚪 {i + 1}", callback_data=f"joker_pick:{game.round}:{i}")
+        for i in range(BUTTONS)
+    ))
     if game.can_cashout:
         kb.row(InlineKeyboardButton(
             text=f"💰 Забрать {format_number(game.payout)}", callback_data="joker_cashout"
@@ -80,7 +92,7 @@ def field_kb(game):
 def win_text(game) -> str:
     text = "🎉 <b>Победа!</b>\n"
     for i, rd in enumerate(game.rounds, 1):
-        text += f"\n🏁 Раунд {i}:\n{game.reveal_line(rd)}\n"
+        text += f"\n🏁 Раунд {i} · риск {rd['level']}:\n{game.reveal_line(rd)}\n"
     text += (
         f"\nПройдено раундов: {game.round - 1}\n"
         f"💰 Выигрыш: <b>{format_number(game.payout)}</b> "
@@ -94,7 +106,7 @@ def lose_text(game) -> str:
     balance = user["balance"] if user else 0
     text = "💀 <b>Вы открыли дверь со скелетом!</b>\n"
     for i, rd in enumerate(game.rounds, 1):
-        text += f"\n🏁 Раунд {i}:\n{game.reveal_line(rd)}\n"
+        text += f"\n🏁 Раунд {i} · риск {rd['level']}:\n{game.reveal_line(rd)}\n"
     text += (
         f"\nПройдено раундов: {game.round - 1}\n"
         f"Ставка {format_number(game.bet)} сгорела.\n"
@@ -110,7 +122,7 @@ async def joker_level_menu(callback: CallbackQuery):
         await callback.answer("Сначала завершите текущую игру!", show_alert=True)
         return
     await callback.message.edit_text(
-        "🃏 <b>Джокер</b>\nВыберите уровень риска:\n"
+        "🃏 <b>Джокер</b>\nВыберите стартовый риск. Перед каждой дверью его можно изменить:\n"
         f"💀 1 — низкий риск, множитель ×{get_joker_levels()[1]['mult']}\n"
         f"💀 2 — высокий риск, множитель ×{get_joker_levels()[2]['mult']}",
         reply_markup=levels_kb(),
@@ -119,8 +131,12 @@ async def joker_level_menu(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("joker:"), StateFilter("*"))
 async def joker_choose_level(callback: CallbackQuery, state: FSMContext):
-    level = int(callback.data.split(":", 1)[1])
-    cfg = get_joker_levels()[level]
+    try:
+        level = int(callback.data.split(":", 1)[1])
+        cfg = get_joker_levels()[level]
+    except (ValueError, KeyError):
+        await callback.answer("Некорректный уровень риска.", show_alert=True)
+        return
     bet = get_pending_bet(callback.from_user.id)
     if bet is not None:
         await state.clear()
@@ -133,7 +149,7 @@ async def joker_choose_level(callback: CallbackQuery, state: FSMContext):
         if not user or bet > user["balance"]:
             await callback.answer("❌ Недостаточно средств.", show_alert=True)
             await callback.message.edit_text(
-                "🃏 <b>Джокер</b>\nВыберите уровень риска:\n"
+                "🃏 <b>Джокер</b>\nВыберите стартовый риск. Перед каждой дверью его можно изменить:\n"
                 f"💀 1 — низкий риск, множитель ×{get_joker_levels()[1]['mult']}\n"
                 f"💀 2 — высокий риск, множитель ×{get_joker_levels()[2]['mult']}",
                 reply_markup=levels_kb(),
@@ -167,7 +183,7 @@ async def quick_joker_start(message: Message, state: FSMContext):
         clear_pending_bet(message.from_user.id)
         await message.answer(
             "🃏 <b>Джокер</b>\nБыстрый старт: <code>дж 30000</code> — начнёт игру со ставкой.\n\n"
-            "Либо выберите уровень риска (ставку потом впишете):",
+            "Либо выберите стартовый риск (ставку потом впишете):",
             reply_markup=levels_kb(),
         )
         return
@@ -182,7 +198,7 @@ async def quick_joker_start(message: Message, state: FSMContext):
     set_pending_bet(message.from_user.id, bet)
     await message.answer(
         f"🃏 <b>Джокер</b> · Ставка: <b>{format_number(bet)}</b>\n"
-        f"Выберите уровень риска — игра начнётся сразу:",
+        "Выберите стартовый риск — игра начнётся сразу:",
         reply_markup=levels_kb(),
     )
 
@@ -214,6 +230,28 @@ async def joker_process_bet(message: Message, state: FSMContext):
     await message.answer(field_text(game), reply_markup=field_kb(game))
 
 
+@router.callback_query(F.data.startswith("joker_risk:"), StateFilter("*"))
+async def joker_change_risk(callback: CallbackQuery):
+    game = registry.game(callback.from_user.id)
+    if not game or game.type != "joker" or game.is_over:
+        await callback.answer("Игра уже завершена.", show_alert=True)
+        return
+    try:
+        _, round_number, level = callback.data.split(":")
+        round_number, level = int(round_number), int(level)
+    except (ValueError, TypeError):
+        await callback.answer("Некорректный выбор риска.", show_alert=True)
+        return
+    if round_number == game.round and level == game.level:
+        await callback.answer("Этот риск уже выбран.")
+        return
+    if round_number != game.round or not game.set_level(level):
+        await callback.answer("Этот раунд уже завершён или риск недоступен.", show_alert=True)
+        return
+    await callback.answer("Риск выбран.")
+    await callback.message.edit_text(field_text(game), reply_markup=field_kb(game))
+
+
 @router.callback_query(F.data.startswith("joker_pick:"), StateFilter("*"))
 async def joker_pick(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -224,7 +262,15 @@ async def joker_pick(callback: CallbackQuery):
     if game.is_over:
         await callback.answer("Игра уже завершена.")
         return
-    pos = int(callback.data.split(":", 1)[1])
+    try:
+        _, round_number, pos = callback.data.split(":")
+        round_number, pos = int(round_number), int(pos)
+    except (ValueError, TypeError):
+        await callback.answer("Некорректная дверь.", show_alert=True)
+        return
+    if round_number != game.round:
+        await callback.answer("Этот раунд уже завершён.", show_alert=True)
+        return
     if pos < 0 or pos >= BUTTONS:
         await callback.answer("Некорректная дверь.")
         return
