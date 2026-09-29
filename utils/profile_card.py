@@ -25,10 +25,10 @@ FRAME_COLORS = {
     "frame_diamond": (180, 230, 255),
 }
 TITLE_DISPLAY = {
-    "title_vip": ("VIP", (242, 203, 116)),
-    "title_legend": ("LEGEND", (255, 183, 109)),
-    "title_whale": ("WHALE", (112, 201, 255)),
-    "title_god": ("GOD", PURPLE),
+    "title_vip": ("ЛОВЕЦ УДАЧИ", (242, 203, 116)),
+    "title_legend": ("ПОВЕЛИТЕЛЬ РИСКА", (255, 183, 109)),
+    "title_whale": ("АЛМАЗНЫЙ МАГНАТ", (112, 201, 255)),
+    "title_god": ("ВЛАДЫКА СУДЬБЫ", PURPLE),
     "title_owner": ("OWNER", (255, 142, 151)),
     "title_ket": ("KET", (111, 230, 192)),
 }

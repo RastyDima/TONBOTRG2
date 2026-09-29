@@ -21,10 +21,10 @@ SHOP_ITEMS = {
         {"id": "frame_diamond", "name": "Алмазная призма", "price": 5_000_000, "color": (180, 230, 255)},
     ],
     "titles": [
-        {"id": "title_vip", "name": "VIP", "price": 1_000_000},
-        {"id": "title_legend", "name": "Legend", "price": 3_000_000},
-        {"id": "title_whale", "name": "Whale", "price": 5_000_000},
-        {"id": "title_god", "name": "God", "price": 10_000_000},
+        {"id": "title_vip", "name": "Ловец удачи", "price": 1_000_000},
+        {"id": "title_legend", "name": "Повелитель риска", "price": 3_000_000},
+        {"id": "title_whale", "name": "Алмазный магнат", "price": 5_000_000},
+        {"id": "title_god", "name": "Владыка судьбы", "price": 10_000_000},
     ],
     "exclusive_titles": [
         {"id": "title_owner", "name": "Владелец"},

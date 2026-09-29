@@ -9,7 +9,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import MAX_BET
 from database import db
-from games.alchemist import INGREDIENTS, INGREDIENT_COUNT, TARGET_RETURN, AlchemistGame
+from games.alchemist import BREW_MODES, INGREDIENTS, INGREDIENT_COUNT, AlchemistGame
 from keyboards.common import back_button, cancel_kb
 from utils.game_registry import (
     cancel_game,
@@ -63,10 +63,40 @@ def pick_text(game, has_bet: bool = False) -> str:
         lines.append("\n🪄 Выберите <b>второй</b> ингредиент:")
     else:
         lines.append(
-            f"🪄 Лаборатория ждёт. Шанс успеха = {TARGET_RETURN:.0%} / множитель зелья.\n"
+            "🪄 Выберите два ингредиента, затем способ варки. Шансы и выплата будут показаны до запуска.\n"
             "Выберите <b>первый</b> ингредиент из шести:"
         )
     return "\n".join(lines)
+
+
+def brew_text(game) -> str:
+    emoji, name, _ = game.recipe
+    first = INGREDIENTS[game.picks[0]]
+    second = INGREDIENTS[game.picks[1]]
+    lines = [
+        "⚗️ <b>Алхимик · выбор варки</b>",
+        f"{first[0]} {first[1]} + {second[0]} {second[1]}",
+        f"{emoji} <b>{name}</b> · ставка {format_number(game.bet)}",
+        "",
+    ]
+    for mode, option in game.brew_options.items():
+        icon = "🛡" if mode == "steady" else "🔥"
+        lines.append(
+            f"{icon} <b>{BREW_MODES[mode]}</b>: шанс {option['threshold'] / 100:.1f}% "
+            f"· ×{option['multiplier']} · выигрыш {format_number(option['payout'])}"
+        )
+    lines.append("\nВыберите способ варки. После выбора ставка будет разыграна.")
+    return "\n".join(lines)
+
+
+def brew_kb():
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="🛡 Стабилизировать", callback_data="alch_brew:steady"),
+        InlineKeyboardButton(text="🔥 Усилить", callback_data="alch_brew:wild"),
+    )
+    kb.row(InlineKeyboardButton(text="❌ Отмена", callback_data="alch_cancel"))
+    return kb.as_markup()
 
 
 def mixing_phases(game) -> list[str]:
@@ -75,7 +105,8 @@ def mixing_phases(game) -> list[str]:
     e2, n2 = INGREDIENTS[game.picks[1]]
     header = (
         f"⚗️ <b>Алхимик</b>\n\n"
-        f"{e1} {n1}\n+\n{e2} {n2}\n\n"
+        f"{e1} {n1}\n+\n{e2} {n2}\n"
+        f"{BREW_MODES[game.mode]} · шанс {game.chance_threshold / 100:.1f}%\n\n"
     )
     statuses = [
         ("⚗️ Ингредиенты помещены в котёл...", "🫧"),
@@ -104,7 +135,7 @@ def mixing_phases(game) -> list[str]:
 
 def win_text(game) -> str:
     result = game.result
-    emoji, name, mult = result
+    emoji, name, _ = result
     e1, n1 = INGREDIENTS[game.picks[0]]
     e2, n2 = INGREDIENTS[game.picks[1]]
     return (
@@ -112,7 +143,7 @@ def win_text(game) -> str:
         f"Смешано: {e1} {n1} + {e2} {n2}\n\n"
         f"━━━━━━━━━━━━━━\n"
         f"✨ <b>Зелье готово!</b>\n"
-        f"{emoji} <b>{name}</b> ×{mult}\n"
+        f"{emoji} <b>{name}</b> · {BREW_MODES[game.mode]} ×{game.multiplier}\n"
         f"💰 Выигрыш: <b>{format_number(game.payout)}</b> "
         f"(+{format_number(game.payout - game.bet)})\n"
         f"━━━━━━━━━━━━━━"
@@ -127,7 +158,7 @@ def lose_text(game) -> str:
     return (
         f"⚗️ <b>Алхимик</b>\n\n"
         f"💥 <b>Крак!</b>\n"
-        f"{emoji} <b>{name}!</b>\n\n"
+        f"{emoji} <b>{name}</b> · {BREW_MODES[game.mode]}\n\n"
         f"Зелье не получилось... Ставка {format_number(game.bet)} сгорела.\n"
         f"💳 Баланс: <b>{format_number(balance)}</b>"
     )
@@ -145,7 +176,11 @@ async def alchemist_menu(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("alch_pick:"), StateFilter("*"))
 async def alchemist_pick(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
-    idx = int(callback.data.split(":", 1)[1])
+    try:
+        idx = int(callback.data.split(":", 1)[1])
+    except (ValueError, TypeError):
+        await callback.answer("Некорректный ингредиент.", show_alert=True)
+        return
     if not 0 <= idx < INGREDIENT_COUNT:
         await callback.answer("Некорректный ингредиент.")
         return
@@ -156,13 +191,14 @@ async def alchemist_pick(callback: CallbackQuery, state: FSMContext):
             await callback.answer("Сначала завершите текущую игру!", show_alert=True)
             return
         if game.ready:
-            await callback.answer("Оба ингредиента уже выбраны.")
+            await callback.answer("Выберите способ варки.")
             return
         if not game.pick(idx):
             await callback.answer("Этот ингредиент уже выбран.", show_alert=True)
             return
         if game.ready:
-            await finish_mix(callback, game)
+            await callback.answer("Выберите способ варки.")
+            await callback.message.edit_text(brew_text(game), reply_markup=brew_kb())
         else:
             await callback.answer("✨ Выбрано!")
             await callback.message.edit_text(pick_text(game), reply_markup=ingredients_kb(game))
@@ -254,7 +290,31 @@ async def alchemist_process_bet(message: Message, state: FSMContext):
     await message.answer(pick_text(game), reply_markup=ingredients_kb(game))
 
 
-async def finish_mix(callback: CallbackQuery, game) -> None:
+@router.callback_query(F.data.startswith("alch_brew:"), StateFilter("*"))
+async def alchemist_brew(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    game = registry.game(user_id)
+    if not game or game.type != "alchemist":
+        await callback.answer("Игра уже завершена.", show_alert=True)
+        return
+    mode = callback.data.split(":", 1)[1]
+    if not game.choose_mode(mode):
+        await callback.answer("Выбор недоступен. Проверьте ингредиенты.", show_alert=True)
+        return
+
+    # Settle before animation: /cancel during the animation cannot refund a known result.
+    if game.success:
+        result = cashout_game(user_id)
+        final_text = win_text(game)
+        level_msg = progress_text(result[2]) if result else ""
+    else:
+        result = lose_game(user_id)
+        final_text = lose_text(game)
+        level_msg = progress_text(result[1]) if result else ""
+    await finish_mix(callback, game, final_text + level_msg)
+
+
+async def finish_mix(callback: CallbackQuery, game, final_text: str) -> None:
     await callback.answer("⚗️ Смешиваю...")
     try:
         frames = mixing_phases(game)
@@ -267,21 +327,8 @@ async def finish_mix(callback: CallbackQuery, game) -> None:
         # Сообщение могли удалить во время анимации — не роняем хендлер.
         pass
 
-    game.resolve()
-    level_msg = ""
-    if game.multiplier <= 0:
-        result = lose_game(game.user_id)
-        final_text = lose_text(game)
-        if result:
-            level_msg = progress_text(result[1])
-    else:
-        result = cashout_game(game.user_id)
-        final_text = win_text(game)
-        if result:
-            level_msg = progress_text(result[2])
-
     try:
-        await callback.message.edit_text(final_text + level_msg)
+        await callback.message.edit_text(final_text)
     except Exception:
         try:
             await callback.bot.send_message(callback.message.chat.id, final_text)

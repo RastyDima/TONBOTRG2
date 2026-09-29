@@ -171,8 +171,9 @@ function ProfilePage({ profile, refreshProfile }) {
         : '0.0';
     const titleInfo = profile.active_title ? TITLE_COLORS[profile.active_title] : null;
     const titleNames = {
-        title_vip: 'VIP', title_legend: 'LEGEND', title_whale: 'WHALE',
-        title_god: 'GOD', title_owner: 'OWNER', title_ket: 'KET',
+        title_vip: 'ЛОВЕЦ УДАЧИ', title_legend: 'ПОВЕЛИТЕЛЬ РИСКА',
+        title_whale: 'АЛМАЗНЫЙ МАГНАТ', title_god: 'ВЛАДЫКА СУДЬБЫ',
+        title_owner: 'OWNER', title_ket: 'KET',
     };
     const initials = (profile.first_name || 'K')[0].toUpperCase();
     const tgUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
@@ -316,29 +317,95 @@ function ProfilePage({ profile, refreshProfile }) {
 }
 
 function GamesPage() {
-    const games = [
-        { icon: '💣', name: 'Мины', desc: '5×5 поле с минами', coming: true },
-        { icon: '🃏', name: 'Джокер', desc: 'Отгадай дверь', coming: true },
-        { icon: '⚗️', name: 'Алхимик', desc: 'Смешай зелья', coming: true },
-        { icon: '🪙', name: 'Монетка', desc: 'Орёл или решка', coming: true },
-    ];
+    const [mineCount, setMineCount] = useState(3);
+    const [round, setRound] = useState(null);
+    const opened = round?.opened.length || 0;
+    const currentMultiplier = round ? MinesDemo.multiplier(round.mineCount, opened) : 1;
+    const playing = round?.status === 'playing';
+    const canCashout = round && MinesDemo.canCashout(round);
+    const nextChance = playing
+        ? Math.round((25 - round.mineCount - opened) / (25 - opened) * 100)
+        : null;
+
+    let statusText = 'Выберите количество мин и начните пробный раунд.';
+    if (playing) statusText = 'Открывайте клетки. Чем дальше, тем выше множитель и риск.';
+    if (round?.status === 'lost') statusText = '💥 Мина! Раунд завершён. Попробуйте другую тактику.';
+    if (round?.status === 'cashed') statusText = `✨ Вы забрали ×${currentMultiplier} в демо-раунде.`;
+    if (round?.status === 'completed') statusText = `🏆 Раунд завершён с множителем ×${currentMultiplier}!`;
+
+    const startRound = () => setRound(MinesDemo.createRound(mineCount));
+    const revealCell = (index) => setRound(previous => previous && MinesDemo.reveal(previous, index));
     return (
         <div>
             <div className="section-title">🎮 Игры</div>
-            <div className="card" style={{ textAlign: 'center', padding: '30px 20px' }}>
-                <p style={{ color: 'var(--text-dim)', marginBottom: '8px' }}>
-                    Игры скоро будут доступны в WebApp!
-                </p>
-                <p style={{ fontSize: '13px', color: 'var(--text-dim)' }}>
-                    Пока что играйте через бота — нажмите "🎮 Игры" в меню бота.
-                </p>
+            <div className="mines-demo card">
+                <div className="mines-demo-header">
+                    <div>
+                        <div className="mines-demo-eyebrow">ПРОБНЫЙ РЕЖИМ</div>
+                        <h2>💣 Мины</h2>
+                        <p>Найдите кристаллы и вовремя заберите множитель.</p>
+                    </div>
+                    <span className="mines-demo-badge">Без ставок</span>
+                </div>
+
+                <div className="mines-demo-settings">
+                    <div className="mines-demo-setting-label">
+                        <span>Количество мин</span><strong>{mineCount} / 10</strong>
+                    </div>
+                    <input type="range" min="1" max="10" value={mineCount}
+                        disabled={playing} onChange={event => setMineCount(Number(event.target.value))}
+                        aria-label="Количество мин" />
+                    <div className="mines-demo-scale"><span>Спокойнее</span><span>Рискованнее</span></div>
+                </div>
+
+                <div className="mines-demo-stats">
+                    <div><span>Открыто</span><strong>{opened} / {round ? 25 - round.mineCount : 25 - mineCount}</strong></div>
+                    <div><span>Множитель</span><strong>×{round?.status === 'lost' ? '0' : currentMultiplier}</strong></div>
+                    <div><span>Следующий ход</span><strong>{nextChance === null ? '—' : `${nextChance}%`}</strong></div>
+                </div>
+
+                <div className="mines-demo-board" role="grid" aria-label="Поле мин 5 на 5">
+                    {Array.from({ length: 25 }, (_, index) => {
+                        const openedCell = round?.opened.includes(index);
+                        const shownMine = round && round.status !== 'playing' && round.mines.includes(index);
+                        const exploded = round?.exploded === index;
+                        return (
+                            <button key={index} type="button" role="gridcell"
+                                className={`mines-demo-cell${openedCell ? ' is-gem' : ''}${shownMine ? ' is-mine' : ''}${exploded ? ' is-exploded' : ''}`}
+                                disabled={!playing || openedCell}
+                                aria-label={openedCell ? `Клетка ${index + 1}: кристалл`
+                                    : shownMine ? `Клетка ${index + 1}: мина`
+                                    : `Клетка ${index + 1}: закрыта`}
+                                onClick={() => revealCell(index)}>
+                                {openedCell ? '💎' : shownMine ? '💣' : '✦'}
+                            </button>
+                        );
+                    })}
+                </div>
+
+                <p className="mines-demo-status" aria-live="polite">{statusText}</p>
+                <div className="mines-demo-actions">
+                    <button type="button" className="btn btn-secondary" onClick={startRound}>
+                        {round ? '↻ Новый раунд' : 'Начать раунд'}
+                    </button>
+                    {playing && (
+                        <button type="button" className="btn btn-primary" disabled={!canCashout}
+                            onClick={() => setRound(previous => MinesDemo.cashout(previous))}>
+                            Забрать ×{currentMultiplier}
+                        </button>
+                    )}
+                </div>
+                <p className="mines-demo-note">Это демо: баланс, опыт и статистика бота не меняются.</p>
             </div>
             <div className="games-grid">
-                {games.map(g => (
-                    <div key={g.name} className="game-card" style={{ opacity: 0.5 }}>
-                        <div className="game-icon">{g.icon}</div>
-                        <div className="game-name">{g.name}</div>
-                        <div className="game-desc">{g.desc}</div>
+                {[
+                    { icon: '🃏', name: 'Джокер', desc: 'Пока в боте' },
+                    { icon: '⚗️', name: 'Алхимик', desc: 'Пока в боте' },
+                ].map(game => (
+                    <div key={game.name} className="game-card game-card--disabled">
+                        <div className="game-icon">{game.icon}</div>
+                        <div className="game-name">{game.name}</div>
+                        <div className="game-desc">{game.desc}</div>
                     </div>
                 ))}
             </div>
@@ -808,4 +875,15 @@ function App() {
     );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+const demoOnly = new URLSearchParams(window.location.search).get('demo') === 'mines';
+ReactDOM.createRoot(document.getElementById('root')).render(
+    demoOnly ? (
+        <div className="app">
+            <div className="header">
+                <h1>TON Casino</h1>
+                <div className="subtitle">Пробная версия игры без входа и ставок</div>
+            </div>
+            <GamesPage />
+        </div>
+    ) : <App />
+);

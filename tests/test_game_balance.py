@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from math import comb
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 _scratch = tempfile.TemporaryDirectory()
 os.environ.update({
@@ -46,25 +46,63 @@ class GameBalanceTests(unittest.TestCase):
         self.assertEqual(game.payout, 185)
         self.assertLess(0.5 * game.multiplier, 1)
 
-    def test_alchemist_profitable_recipe_is_not_guaranteed(self):
+    def test_alchemist_modes_show_odds_and_roll_once(self):
         recipe = RECIPES[frozenset({3, 4})]
         self.assertEqual(recipe[2], 4.0)
-        threshold = int(10_000 * TARGET_RETURN / recipe[2])
-        self.assertLessEqual(threshold / 10_000 * recipe[2], TARGET_RETURN)
-        with patch("games.alchemist.secrets.randbelow", return_value=threshold - 1) as roll:
-            win = AlchemistGame(991234, 100)
-            win.pick(3); win.pick(4)
-            self.assertEqual(win.payout, 400)
-            self.assertEqual(win.payout, 400)
+        win = AlchemistGame(991234, 100)
+        self.assertFalse(win.choose_mode("steady"))
+        win.pick(3); win.pick(4)
+        self.assertFalse(win.can_cashout)
+        steady = win.brew_options["steady"]
+        wild = win.brew_options["wild"]
+        self.assertGreater(steady["threshold"], wild["threshold"])
+        self.assertLess(steady["payout"], wild["payout"])
+        with patch("games.alchemist.secrets.randbelow", return_value=steady["threshold"] - 1) as roll:
+            self.assertTrue(win.choose_mode("steady"))
+            self.assertFalse(win.choose_mode("wild"))
+            self.assertEqual(win.payout, steady["payout"])
+            self.assertTrue(win.can_cashout)
             roll.assert_called_once()
-        with patch("games.alchemist.secrets.randbelow", return_value=threshold):
+        with patch("games.alchemist.secrets.randbelow", return_value=wild["threshold"]):
             loss = AlchemistGame(991234, 100)
             loss.pick(3); loss.pick(4)
+            self.assertTrue(loss.choose_mode("wild"))
             self.assertEqual(loss.payout, 0)
-        for _, _, multiplier in RECIPES.values():
-            if multiplier:
-                self.assertLessEqual(int(10_000 * TARGET_RETURN / multiplier) / 10_000 * multiplier,
-                                     TARGET_RETURN)
+        for picks in RECIPES:
+            game = AlchemistGame(991234, 100)
+            for pick in picks:
+                game.pick(pick)
+            for option in game.brew_options.values():
+                self.assertLessEqual(option["threshold"] / 10_000 * option["multiplier"],
+                                     TARGET_RETURN + 1e-10)
+                self.assertLessEqual(option["multiplier"], MAX_GAME_MULTIPLIER)
+
+    def test_alchemist_settles_before_animation_and_cannot_be_refunded(self):
+        from handlers.alchemist import alchemist_brew
+
+        user_id = 991234
+        before = db.get_user(user_id)["balance"]
+        db.add_balance(user_id, -100, "game_bet", "offline test")
+        game = AlchemistGame(user_id, 100)
+        game.pick(3); game.pick(4)
+        self.assertTrue(registry.register(user_id, "alchemist", game))
+
+        class FakeUser:
+            id = user_id
+
+        class FakeCallback:
+            from_user = FakeUser()
+            data = "alch_brew:steady"
+
+        animation = AsyncMock()
+        with patch("games.alchemist.secrets.randbelow", return_value=9999), \
+             patch("handlers.alchemist.finish_mix", animation):
+            asyncio.run(alchemist_brew(FakeCallback()))
+        self.assertTrue(game.lost)
+        self.assertIsNone(registry.game(user_id))
+        self.assertIsNone(cancel_game(user_id))
+        self.assertEqual(db.get_user(user_id)["balance"], before - 100)
+        animation.assert_awaited_once()
 
     def test_unsafe_saved_settings_are_clamped(self):
         db.set_setting("joker_mult_1", 20)
