@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from math import comb
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 _scratch = tempfile.TemporaryDirectory()
@@ -21,10 +22,11 @@ os.environ.update({
 from config import MAX_BET, MAX_GAME_MULTIPLIER  # noqa: E402
 from database import db  # noqa: E402
 from games.alchemist import AlchemistGame, RECIPES, TARGET_RETURN  # noqa: E402
+from games.blackjack import BlackjackGame, PAYOUT_MULTIPLIER as BLACKJACK_PAYOUT, hand_value  # noqa: E402
 from games.coinflip import CoinFlipGame  # noqa: E402
 from games.joker import JokerGame, get_joker_levels  # noqa: E402
 from games.mines import MinesGame, get_house_edge  # noqa: E402
-from utils.game_registry import cancel_game, cashout_game, lose_game, registry  # noqa: E402
+from utils.game_registry import cancel_game, cashout_game, draw_game, lose_game, registry  # noqa: E402
 from utils.helpers import parse_bet  # noqa: E402
 
 
@@ -45,6 +47,89 @@ class GameBalanceTests(unittest.TestCase):
             game.flip("орёл")
         self.assertEqual(game.payout, 185)
         self.assertLess(0.5 * game.multiplier, 1)
+
+    def test_blackjack_aces_deck_and_payout_cap(self):
+        self.assertEqual(hand_value([("A", "♠"), ("A", "♥"), ("9", "♦")]), 21)
+        game = BlackjackGame(991234, MAX_BET)
+        self.assertEqual(len(set(game.player + game.dealer + game.deck)), 52)
+        self.assertEqual(len(game.deck), 48)
+        self.assertEqual(BLACKJACK_PAYOUT, 1.9)
+        self.assertLessEqual(int(MAX_BET * BLACKJACK_PAYOUT), 475_000)
+
+    def test_blackjack_win_settles_once_and_stale_button_cannot_replay(self):
+        from handlers.blackjack import blackjack_action
+
+        user_id = 991234
+        before = db.get_user(user_id)["balance"]
+        # Draw order from right: player 10, dealer A, player 9, dealer 7.
+        deck = [("7", "♣"), ("9", "♦"), ("A", "♥"), ("10", "♠")]
+        game = BlackjackGame(user_id, 100, deck=deck)
+        db.add_balance(user_id, -100, "game_bet", "offline test")
+        self.assertTrue(registry.register(user_id, "blackjack", game))
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=user_id),
+            data="bj:stand:0",
+            answer=AsyncMock(),
+            message=SimpleNamespace(edit_text=AsyncMock()),
+        )
+        asyncio.run(blackjack_action(callback))
+        self.assertEqual(game.outcome, "win")
+        self.assertEqual(db.get_user(user_id)["balance"], before + 90)
+        self.assertIsNone(registry.game(user_id))
+        asyncio.run(blackjack_action(callback))
+        self.assertEqual(db.get_user(user_id)["balance"], before + 90)
+        self.assertIsNone(cancel_game(user_id))
+
+    def test_blackjack_draw_refunds_once_without_progress(self):
+        from handlers.blackjack import blackjack_action
+
+        user_id = 991234
+        before = db.get_user(user_id)["balance"]
+        deck = [("8", "♣"), ("8", "♥"), ("10", "♣"), ("10", "♠")]
+        game = BlackjackGame(user_id, 100, deck=deck)
+        db.add_balance(user_id, -100, "game_bet", "offline test")
+        self.assertTrue(registry.register(user_id, "blackjack", game))
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=user_id),
+            data="bj:stand:0",
+            answer=AsyncMock(),
+            message=SimpleNamespace(edit_text=AsyncMock()),
+        )
+        asyncio.run(blackjack_action(callback))
+        self.assertEqual(game.outcome, "draw")
+        self.assertEqual(db.get_user(user_id)["balance"], before)
+        self.assertIsNone(draw_game(user_id))
+        self.assertIsNone(registry.game(user_id))
+
+    def test_blackjack_cancel_after_deal_forfeits_bet(self):
+        user_id = 991234
+        before = db.get_user(user_id)["balance"]
+        game = BlackjackGame(user_id, 100)
+        db.add_balance(user_id, -100, "game_bet", "offline test")
+        self.assertTrue(registry.register(user_id, "blackjack", game))
+        self.assertIsNone(cancel_game(user_id))
+        self.assertEqual(db.get_user(user_id)["balance"], before - 100)
+        self.assertIsNone(registry.game(user_id))
+
+    def test_blackjack_rejects_repeated_hit_from_old_button(self):
+        from handlers.blackjack import blackjack_action
+
+        user_id = 991234
+        deck = [("2", "♣"), ("7", "♣"), ("4", "♥"), ("10", "♣"), ("5", "♠")]
+        game = BlackjackGame(user_id, 100, deck=deck)
+        self.assertTrue(registry.register(user_id, "blackjack", game))
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=user_id),
+            data="bj:hit:0",
+            answer=AsyncMock(),
+            message=SimpleNamespace(edit_text=AsyncMock()),
+        )
+        asyncio.run(blackjack_action(callback))
+        self.assertEqual(game.turn, 1)
+        self.assertEqual(len(game.player), 3)
+        asyncio.run(blackjack_action(callback))
+        self.assertEqual(len(game.player), 3)
+        self.assertEqual(game.turn, 1)
 
     def test_alchemist_modes_show_odds_and_roll_once(self):
         recipe = RECIPES[frozenset({3, 4})]

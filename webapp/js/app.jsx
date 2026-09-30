@@ -352,7 +352,7 @@ function GamesPage() {
     const revealCell = (index) => setRound(previous => previous && MinesDemo.reveal(previous, index));
     return (
         <div className="page games-page">
-            <div className="page-intro"><span>ИГРОВАЯ ЗОНА</span><span className="page-intro-mark">01 / 03</span></div>
+            <div className="page-intro"><span>ИГРОВАЯ ЗОНА</span><span className="page-intro-mark">01 / 04</span></div>
             <div className="section-title">Игры <span>Выберите свой риск</span></div>
             <div className="mines-demo card">
                 <div className="mines-demo-header">
@@ -417,6 +417,7 @@ function GamesPage() {
                 {[
                     { icon: '🃏', name: 'Джокер', desc: 'Пока в боте' },
                     { icon: '⚗️', name: 'Алхимик', desc: 'Пока в боте' },
+                    { icon: '🂡', name: '21', desc: 'Пока в боте' },
                 ].map(game => (
                     <div key={game.name} className="game-card game-card--disabled">
                         <div className="game-icon">{game.icon}</div>

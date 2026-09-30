@@ -62,12 +62,13 @@ async def cmd_start(message: Message):
 async def cmd_help(message: Message):
     await message.answer(
         "ℹ️ <b>Помощь</b>\n\n"
-        "🎮 <b>Игры:</b> Мины, Джокер, Алхимик, Монетка (доступны из меню)\n"
+        "🎮 <b>Игры:</b> Мины, Джокер, Алхимик, Монетка, 21 (доступны из меню)\n"
         "⚡ <b>Быстрый старт:</b>\n"
         "<code>м 30000</code> — мины\n"
         "<code>дж 30000</code> — джокер\n"
         "<code>алх 30000</code> — алхимик\n"
         "<code>мон 30000</code> — монетка\n"
+        "<code>21 30000</code> — карточная игра 21\n"
         "💸 <b>Перевод:</b> ответьте на сообщение игрока <code>п 12000</code>\n"
         "💰 <b>Баланс:</b> <code>б</code>\n"
         "👤 /profile — профиль и статистика\n"
@@ -106,17 +107,24 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "cancel", StateFilter("*"))
 async def cancel_action(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    cancel_game(callback.from_user.id)
+    active = registry.game(callback.from_user.id)
+    refunded = cancel_game(callback.from_user.id)
     await callback.answer()
-    await callback.message.edit_text("❌ Действие отменено.")
+    text = ("❌ Раздача завершена. Ставка проиграна." if active and not refunded
+            else "❌ Игра отменена. Ставка возвращена." if refunded
+            else "❌ Действие отменено.")
+    await callback.message.edit_text(text)
 
 
 @router.message(Command("cancel"), StateFilter("*"))
 async def cancel_command(message: Message, state: FSMContext):
     await state.clear()
     if registry.game(message.from_user.id):
-        cancel_game(message.from_user.id)
-        await message.answer("❌ Игра отменена. Ставка возвращена на баланс.")
+        refunded = cancel_game(message.from_user.id)
+        await message.answer(
+            "❌ Игра отменена. Ставка возвращена на баланс."
+            if refunded else "❌ Раздача завершена. Ставка проиграна."
+        )
     else:
         await message.answer("❌ Отменено.")
 

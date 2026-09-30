@@ -1,7 +1,7 @@
 from database import db, level_info, level_name, _calc_level
 from utils.achievements import check_achievements
 
-GAME_LABELS = {"mines": "Мины", "joker": "Джокер", "alchemist": "Алхимик", "ruby_roulette": "Рубиновая рулетка", "coinflip": "Монетка"}
+GAME_LABELS = {"mines": "Мины", "joker": "Джокер", "alchemist": "Алхимик", "ruby_roulette": "Рубиновая рулетка", "coinflip": "Монетка", "blackjack": "21"}
 
 
 class GameRegistry:
@@ -159,12 +159,29 @@ def lose_game(user_id: int):
 
 
 def cancel_game(user_id: int):
-    """Отменяет игру: ставка возвращается на баланс."""
+    """Отменяет игру; после открытой раздачи «21» ставка проигрывается."""
     entry = registry.get(user_id)
     if not entry:
         return None
     game = entry["game"]
+    if not getattr(game, "can_refund", True):
+        lose_game(user_id)
+        return None
     registry.release(user_id)
     db.add_balance(user_id, game.bet, "game_bet", "Возврат ставки")
     db.add_game(user_id, entry["type"], game.bet, game.bet, "cancel")
+    return game
+
+
+def draw_game(user_id: int):
+    """Ничья в «21»: вернуть ставку без бонусов и повторного начисления XP."""
+    entry = registry.get(user_id)
+    if not entry or entry["type"] != "blackjack":
+        return None
+    game = entry["game"]
+    if game.outcome != "draw" or game.cashed_out:
+        return None
+    registry.release(user_id)
+    db.add_balance(user_id, game.bet, "game_bet", "Возврат ставки при ничьей в 21")
+    db.add_game(user_id, "blackjack", game.bet, game.bet, "draw")
     return game

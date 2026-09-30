@@ -1,4 +1,4 @@
-from . import admin, alchemist, coinflip, economy, games, joker, mines, profile, promo, rating, referral, ruby_roulette, shop, start
+from . import admin, alchemist, blackjack, coinflip, economy, games, joker, mines, profile, promo, rating, referral, ruby_roulette, shop, start
 
 
 def register_handlers(dp) -> None:
@@ -13,6 +13,7 @@ def register_handlers(dp) -> None:
         joker.router,
         alchemist.router,
         coinflip.router,
+        blackjack.router,
         ruby_roulette.router,
         referral.router,
         shop.router,

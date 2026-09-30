@@ -23,6 +23,7 @@ def ton_games():
             InlineKeyboardButton(text="⚗️ Алхимик", callback_data="alchemist"),
             InlineKeyboardButton(text="🪙 Монетка", callback_data="coinflip"),
         ],
+        [InlineKeyboardButton(text="🂡 21", callback_data="blackjack")],
         [back_button("menu_games")],
     ])
 
