@@ -118,12 +118,14 @@ function NavBar({ page, onNavigate }) {
         { id: 'ref', icon: '👥', label: 'Рефералы' },
     ];
     return (
-        <nav className="nav-bar">
+        <nav className="nav-bar" aria-label="Разделы приложения">
             {items.map(it => (
                 <button
                     key={it.id}
+                    type="button"
                     className={`nav-item ${page === it.id ? 'active' : ''}`}
                     onClick={() => onNavigate(it.id)}
+                    aria-current={page === it.id ? 'page' : undefined}
                 >
                     <span className="nav-icon">{it.icon}</span>
                     {it.label}
@@ -189,7 +191,8 @@ function ProfilePage({ profile, refreshProfile }) {
     const photoUrl = tgUser?.photo_url;
 
     return (
-        <div>
+        <div className="page profile-page">
+            <div className="page-intro"><span>ВАШ ПРОФИЛЬ</span><span className="page-intro-mark">✦ TON CASINO</span></div>
             <div className="profile-header">
                 <FrameAvatar frame={profile.active_frame} photoUrl={photoUrl} initials={initials} />
                 <div className="profile-info">
@@ -207,59 +210,62 @@ function ProfilePage({ profile, refreshProfile }) {
                             {titleNames[profile.active_title] || profile.active_title}
                         </div>
                     )}
-                    <div style={{ marginTop: '10px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <span style={{ color: level.color, fontWeight: 'bold', fontSize: '16px' }}>
+                    <div className="profile-progress">
+                        <div className="profile-level-row">
+                            <span className="profile-level" style={{ color: level.color }}>
                                 Ур. {level.level}
                             </span>
-                            <span style={{ color: level.color, fontSize: '12px', opacity: 0.8 }}>
+                            <span className="profile-level-name" style={{ color: level.color }}>
                                 {level.name}
                             </span>
                         </div>
-                        <div style={{ marginTop: '6px', background: '#1e1837', borderRadius: '6px', height: '8px', overflow: 'hidden' }}>
+                        <div className="profile-progress-track">
                             <div style={{
                                 width: `${Math.round(level.progress * 100)}%`,
                                 height: '100%',
                                 background: `linear-gradient(90deg, ${level.color}, ${level.color}88)`,
-                                borderRadius: '6px',
                                 transition: 'width 0.3s',
                             }} />
                         </div>
-                        <div style={{ color: '#8c82af', fontSize: '10px', marginTop: '4px' }}>
+                        <div className="profile-progress-caption">
                             {level.xp} / {level.nextXp} XP
                         </div>
                     </div>
                 </div>
             </div>
 
-            <div className="card">
+            <div className="card wallet-card">
                 <div className="balance-row">
                     <div className="balance-item">
                         <div className="balance-label">Баланс</div>
+                        <div className="balance-symbol ton-symbol" aria-hidden="true">◆</div>
                         <div className="balance-value ton">{formatNumber(profile.balance)}</div>
                         <div className="balance-unit">TON</div>
                     </div>
                     <div className="balance-item">
                         <div className="balance-label">Рубины</div>
+                        <div className="balance-symbol ruby-symbol" aria-hidden="true">♦</div>
                         <div className="balance-value ruby">{formatNumber(Math.floor(profile.rubies))}</div>
                         <div className="balance-unit">GEMS</div>
                     </div>
                 </div>
             </div>
 
-            <div className="card">
-                <div className="card-title">Статистика</div>
-                <div className="stat-row">
-                    <span className="stat-label">Игр</span>
-                    <span className="stat-value">{formatNumber(profile.total_games)}</span>
-                </div>
-                <div className="stat-row">
-                    <span className="stat-label">Побед</span>
-                    <span className="stat-value green">{formatNumber(profile.wins)}</span>
-                </div>
-                <div className="stat-row">
-                    <span className="stat-label">Поражений</span>
-                    <span className="stat-value red">{formatNumber(profile.losses)}</span>
+            <div className="card stats-card">
+                <div className="card-title">Статистика <span>ВСЁ ВРЕМЯ</span></div>
+                <div className="stats-primary">
+                    <div className="stat-row">
+                        <span className="stat-label">Игр</span>
+                        <span className="stat-value">{formatNumber(profile.total_games)}</span>
+                    </div>
+                    <div className="stat-row">
+                        <span className="stat-label">Побед</span>
+                        <span className="stat-value green">{formatNumber(profile.wins)}</span>
+                    </div>
+                    <div className="stat-row">
+                        <span className="stat-label">Поражений</span>
+                        <span className="stat-value red">{formatNumber(profile.losses)}</span>
+                    </div>
                 </div>
                 <div className="winrate-container">
                     <div className="winrate-header">
@@ -345,8 +351,9 @@ function GamesPage() {
     const startRound = () => setRound(MinesDemo.createRound(mineCount));
     const revealCell = (index) => setRound(previous => previous && MinesDemo.reveal(previous, index));
     return (
-        <div>
-            <div className="section-title">🎮 Игры</div>
+        <div className="page games-page">
+            <div className="page-intro"><span>ИГРОВАЯ ЗОНА</span><span className="page-intro-mark">01 / 03</span></div>
+            <div className="section-title">Игры <span>Выберите свой риск</span></div>
             <div className="mines-demo card">
                 <div className="mines-demo-header">
                     <div>
@@ -424,6 +431,7 @@ function GamesPage() {
 
 function ShopPage({ profile, refreshProfile }) {
     const [shop, setShop] = useState(null);
+    const [category, setCategory] = useState('frames');
     const [toast, setToast] = useState(null);
     const [tryOn, setTryOn] = useState(null);
     const photoUrl = window.Telegram?.WebApp?.initDataUnsafe?.user?.photo_url;
@@ -501,7 +509,7 @@ function ShopPage({ profile, refreshProfile }) {
     if (!shop) return <Loading />;
 
     return (
-        <div>
+        <div className="page shop-page">
             <Toast {...toast} />
             {tryOn && (
                 <div className="tryon-overlay" role="dialog" aria-modal="true" aria-label="Примерка рамки"
@@ -527,8 +535,9 @@ function ShopPage({ profile, refreshProfile }) {
                     </div>
                 </div>
             )}
-            <div className="section-title">🛒 Магазин</div>
-            <div className="card">
+            <div className="page-intro"><span>КОЛЛЕКЦИЯ</span><span className="page-intro-mark">✦ СТИЛЬ ИГРОКА</span></div>
+            <div className="section-title">Магазин <span>Соберите свой образ</span></div>
+            <div className="card shop-wallet">
                 <div className="balance-row">
                     <div className="balance-item">
                         <div className="balance-label">Баланс</div>
@@ -538,7 +547,11 @@ function ShopPage({ profile, refreshProfile }) {
                 </div>
             </div>
 
-            <div className="card">
+            <div className="category-switch" role="tablist" aria-label="Товары магазина">
+                <button type="button" role="tab" aria-selected={category === 'frames'} className={category === 'frames' ? 'active' : ''} onClick={() => setCategory('frames')}>Рамки <span>{shop.frames.length}</span></button>
+                <button type="button" role="tab" aria-selected={category === 'titles'} className={category === 'titles' ? 'active' : ''} onClick={() => setCategory('titles')}>Титулы <span>{shop.titles.length}</span></button>
+            </div>
+            {category === 'frames' && <div className="card shop-section" role="tabpanel">
                 <div className="card-title">🖼 Рамки профиля</div>
                 <div className="shop-category">
                     {shop.frames.map(f => (
@@ -568,9 +581,9 @@ function ShopPage({ profile, refreshProfile }) {
                         </div>
                     ))}
                 </div>
-            </div>
+            </div>}
 
-            <div className="card">
+            {category === 'titles' && <div className="card shop-section" role="tabpanel">
                 <div className="card-title">🏷 Титулы</div>
                 <div className="shop-category">
                     {shop.titles.map(t => {
@@ -600,7 +613,7 @@ function ShopPage({ profile, refreshProfile }) {
                         );
                     })}
                 </div>
-            </div>
+            </div>}
         </div>
     );
 }
@@ -618,8 +631,9 @@ function ReferralPage({ profile }) {
     };
 
     return (
-        <div>
-            <div className="section-title">👥 Рефералы</div>
+        <div className="page referrals-page">
+            <div className="page-intro"><span>КОМАНДА</span><span className="page-intro-mark">✦ 5% БОНУС</span></div>
+            <div className="section-title">Рефералы <span>Приглашайте друзей</span></div>
             <div className="card">
                 <div className="card-title">Ваша ссылка</div>
                 <div className="ref-link">{refLink}</div>
@@ -668,9 +682,10 @@ function LeaderboardPage({ profile }) {
     ];
 
     return (
-        <div>
-            <div className="section-title">🏆 Рейтинг</div>
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+        <div className="page leaderboard-page">
+            <div className="page-intro"><span>ЛИДЕРЫ</span><span className="page-intro-mark">ТОП 20</span></div>
+            <div className="section-title">Рейтинг <span>Лучшие игроки клуба</span></div>
+            <div className="leaderboard-tabs">
                 {tabs.map(t => (
                     <button
                         key={t.id}
@@ -684,29 +699,18 @@ function LeaderboardPage({ profile }) {
             {!data ? <Loading /> : (
                 <>
                     {data.my_rank && (
-                        <div className="card" style={{ textAlign: 'center', padding: '12px' }}>
-                            <span style={{ color: 'var(--text-dim)', fontSize: '13px' }}>Ваша позиция: </span>
-                            <span style={{ color: 'var(--gold)', fontWeight: 700, fontSize: '18px' }}>#{data.my_rank}</span>
+                        <div className="card my-rank">
+                            <span>ВАША ПОЗИЦИЯ</span>
+                            <strong>#{data.my_rank}</strong>
                         </div>
                     )}
-                    <div className="card">
+                    <div className="card leaderboard-list">
                         {data.players.length === 0 ? (
                             <p style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '20px 0' }}>
                                 Пока нет данных
                             </p>
                         ) : data.players.map(p => (
-                            <div key={p.user_id} style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '12px',
-                                padding: '10px 0',
-                                borderBottom: '1px solid var(--border)',
-                                opacity: p.is_me ? 1 : 0.85,
-                                background: p.is_me ? 'rgba(150,86,255,0.08)' : 'transparent',
-                                margin: p.is_me ? '0 -8px' : 0,
-                                padding: p.is_me ? '10px 8px' : '10px 0',
-                                borderRadius: p.is_me ? '8px' : 0,
-                            }}>
+                            <div key={p.user_id} className={`leaderboard-player${p.is_me ? ' is-me' : ''}`}>
                                 <div style={{
                                     width: '28px',
                                     textAlign: 'center',
@@ -716,7 +720,7 @@ function LeaderboardPage({ profile }) {
                                 }}>
                                     {p.rank <= 3 ? medals[p.rank - 1] : p.rank}
                                 </div>
-                                <div className="avatar" style={{ width: '36px', height: '36px', fontSize: '16px', border: p.is_me ? '2px solid var(--purple)' : '1px solid var(--border)' }}>
+                                <div className="avatar leaderboard-avatar">
                                     {(p.first_name || 'K')[0].toUpperCase()}
                                 </div>
                                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -781,9 +785,10 @@ function AuthScreen({ onAuth }) {
 
     return (
         <div className="auth-screen">
-            <div className="logo">🎰</div>
+            <div className="auth-orbit" aria-hidden="true"><span>✦</span></div>
+            <div className="auth-kicker">ИГРА · СТИЛЬ · СООБЩЕСТВО</div>
             <h2>TON Casino</h2>
-            <p>Играй и зарабатывай</p>
+            <p>Ваш игровой клуб в Telegram</p>
             {loading ? (
                 <p style={{ color: 'var(--purple)' }}>Вход...</p>
             ) : error ? (
@@ -869,8 +874,9 @@ function App() {
     return (
         <div className="app">
             <div className="header">
-                <h1>TON Casino</h1>
-                <div className="subtitle">Играй и зарабатывай</div>
+                <div className="brand-mark" aria-hidden="true">✦</div>
+                <div className="brand-copy"><h1>TON CASINO</h1><div className="subtitle">ИГРА · СТИЛЬ · СООБЩЕСТВО</div></div>
+                <div className="header-spark" aria-hidden="true">✧</div>
             </div>
 
             {page === 'profile' && <ProfilePage profile={profile} refreshProfile={refreshProfile} />}
@@ -889,8 +895,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     demoOnly ? (
         <div className="app">
             <div className="header">
-                <h1>TON Casino</h1>
-                <div className="subtitle">Пробная версия игры без входа и ставок</div>
+                <div className="brand-mark" aria-hidden="true">✦</div>
+                <div className="brand-copy"><h1>TON CASINO</h1><div className="subtitle">ПРОБНАЯ ВЕРСИЯ · БЕЗ СТАВОК</div></div>
+                <div className="header-spark" aria-hidden="true">✧</div>
             </div>
             <GamesPage />
         </div>
