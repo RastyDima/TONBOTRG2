@@ -836,7 +836,7 @@ body {
 .mines-demo-status { min-height: 36px; margin: 15px 0 10px; color: var(--text-dim); font-size: 13px; line-height: 1.4; text-align: center; }
 .mines-demo-actions { display: flex; gap: 8px; }
 .mines-demo-actions .btn { flex: 1; padding: 11px 7px; font-size: 13px; }
-.mines-demo-actions .btn:disabled { opacity: 0.45; cursor: default; }
+.mines-demo-actions .btn:disabled { opacity: 0.45; filter: grayscale(0.8); cursor: default; }
 .mines-demo-note { color: var(--text-dim); font-size: 11px; text-align: center; line-height: 1.4; margin-top: 12px; }
 
 /* Referral */
@@ -1266,6 +1266,73 @@ body {
     color: #9cddca;
 }
 .mines-demo-cell.is-gem { background: #19445a; }
+.mines-balance {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 18px;
+    padding: 12px 14px;
+    border: 1px solid #3b645e;
+    border-radius: 13px;
+    color: #9dc0be;
+    background: rgba(42, 102, 88, .18);
+    font-size: 12px;
+}
+.mines-balance strong { color: #ffd17a; font-size: 15px; }
+.mines-demo-settings { margin-top: 10px; }
+.mines-bet-label {
+    display: block;
+    margin-bottom: 5px;
+    font-size: 12px;
+    font-weight: 700;
+}
+.mines-demo-settings .mines-bet-input {
+    width: 100%;
+    height: 43px;
+    margin: 0;
+    padding: 9px 12px;
+    border: 1px solid #426170;
+    border-radius: 9px;
+    outline: none;
+    background: #101e2d;
+    color: #f0f5f7;
+    font: inherit;
+    font-size: 17px;
+    font-weight: 800;
+}
+.mines-bet-input:focus { border-color: #72e5cd; }
+.mines-bet-input:disabled { opacity: .66; }
+.mines-bet-hint {
+    margin: 4px 0 17px;
+    color: #8daabb;
+    font-size: 10px;
+}
+.mines-error {
+    margin: -1px 0 11px;
+    padding: 10px;
+    border: 1px solid rgba(255, 126, 145, .38);
+    border-radius: 9px;
+    background: rgba(255, 126, 145, .08);
+    color: #ffacb8;
+    font-size: 12px;
+}
+.mines-proof {
+    margin-top: 17px;
+    padding: 10px 12px;
+    border: 1px solid #35525f;
+    border-radius: 11px;
+    color: #9ab8bd;
+    font-size: 11px;
+}
+.mines-proof summary { color: #a4e9d5; cursor: pointer; }
+.mines-proof span { display: block; margin-top: 8px; }
+.mines-proof code {
+    display: block;
+    margin-top: 3px;
+    color: #d0e8e3;
+    overflow-wrap: anywhere;
+}
 .game-card {
     background: linear-gradient(145deg, #1a2a3b, #152232);
     border-radius: 18px;

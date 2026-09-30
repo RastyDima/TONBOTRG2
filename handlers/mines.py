@@ -7,7 +7,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import MAX_BET, MAX_GAME_MULTIPLIER
 from database import db
-from games.mines import COLS, FIELD_SIZE, MinesGame, ROWS
+from games.mines import COLS, FIELD_SIZE, MAX_MINES, MIN_MINES, MinesGame, ROWS
 from keyboards.common import back_button, cancel_kb
 from utils.game_registry import (
     cancel_game,
@@ -32,6 +32,21 @@ def is_mines_quick(message: Message) -> bool:
 
 class MinesStates(StatesGroup):
     bet = State()
+
+
+def place_mines_bet(user_id: int, bet: int, count: int) -> MinesGame | None:
+    game = MinesGame(user_id, bet, count)
+    if not registry.register(user_id, "mines", game):
+        return None
+    try:
+        spent = db.spend_balance(user_id, bet, "Ставка в игре Мины")
+    except Exception:
+        registry.release(user_id)
+        raise
+    if not spent:
+        registry.release(user_id)
+        return None
+    return game
 
 
 def mines_count_kb():
@@ -69,6 +84,8 @@ def field_text(game) -> str:
     )
     if not game.can_cashout:
         text += "\nОткройте безопасные клетки, чтобы забрать выигрыш."
+    elif game.safe_revealed:
+        text += "\nПосле открытия клетки отмена считается поражением."
     return text
 
 
@@ -79,13 +96,16 @@ def field_kb(game):
         for c in range(COLS):
             idx = r * COLS + c
             text = "🟩" if idx in game.revealed else "⬛"
-            row.append(InlineKeyboardButton(text=text, callback_data=f"mines_cell:{idx}"))
+            row.append(InlineKeyboardButton(text=text, callback_data=f"mines_cell:{game.public_id}:{idx}"))
         kb.row(*row)
     if game.can_cashout:
         kb.row(InlineKeyboardButton(
-            text=f"💰 Забрать {format_number(game.payout)}", callback_data="mines_cashout"
+            text=f"💰 Забрать {format_number(game.payout)}", callback_data=f"mines_cashout:{game.public_id}"
         ))
-    kb.row(InlineKeyboardButton(text="❌ Отмена", callback_data="mines_cancel"))
+    kb.row(InlineKeyboardButton(
+        text="❌ Отмена" if game.can_refund else "❌ Сдаться · ставка сгорит",
+        callback_data=f"mines_cancel:{game.public_id}",
+    ))
     return kb.as_markup()
 
 
@@ -123,7 +143,13 @@ async def mines_count_menu(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("mines:"), StateFilter("*"))
 async def mines_choose_count(callback: CallbackQuery, state: FSMContext):
-    count = int(callback.data.split(":", 1)[1])
+    try:
+        count = int(callback.data.split(":", 1)[1])
+    except (TypeError, ValueError):
+        count = 0
+    if not MIN_MINES <= count <= MAX_MINES:
+        await callback.answer("Некорректное количество мин.", show_alert=True)
+        return
     bet = get_pending_bet(callback.from_user.id)
     if bet is not None:
         await state.clear()
@@ -139,9 +165,10 @@ async def mines_choose_count(callback: CallbackQuery, state: FSMContext):
                 "💣 <b>Мины</b>\nВыберите количество мин (1–10):", reply_markup=mines_count_kb()
             )
             return
-        db.add_balance(callback.from_user.id, -bet, "game_bet", "Ставка в игре Мины")
-        game = MinesGame(callback.from_user.id, bet, count)
-        registry.register(callback.from_user.id, "mines", game)
+        game = place_mines_bet(callback.from_user.id, bet, count)
+        if game is None:
+            await callback.answer("❌ Ставка недоступна или уже идёт другая игра.", show_alert=True)
+            return
         await callback.answer(f"💣 Игра началась! Ставка: {format_number(bet)}")
         await callback.message.edit_text(field_text(game), reply_markup=field_kb(game))
         return
@@ -188,6 +215,10 @@ async def mines_process_bet(message: Message, state: FSMContext):
         return
     data = await state.get_data()
     mines = data.get("mines")
+    if type(mines) is not int or not MIN_MINES <= mines <= MAX_MINES:
+        await state.clear()
+        await message.answer("❌ Выберите количество мин заново.")
+        return
     bet = parse_bet(message.text)
     if bet is None:
         await message.answer(f"❌ Введите ставку от 1 до {format_number(MAX_BET)}:")
@@ -202,9 +233,10 @@ async def mines_process_bet(message: Message, state: FSMContext):
     if bet > user["balance"]:
         await message.answer(f"❌ Недостаточно средств. Баланс: {format_number(user['balance'])}")
         return
-    db.add_balance(message.from_user.id, -bet, "game_bet", "Ставка в игре Мины")
-    game = MinesGame(message.from_user.id, bet, mines)
-    registry.register(message.from_user.id, "mines", game)
+    game = place_mines_bet(message.from_user.id, bet, mines)
+    if game is None:
+        await message.answer("❌ Ставка недоступна или уже идёт другая игра.")
+        return
     await state.clear()
     await message.answer(field_text(game), reply_markup=field_kb(game))
 
@@ -219,7 +251,14 @@ async def mines_reveal(callback: CallbackQuery):
     if game.is_over:
         await callback.answer("Игра уже завершена.")
         return
-    idx = int(callback.data.split(":", 1)[1])
+    parts = callback.data.split(":")
+    if len(parts) != 3 or parts[1] != game.public_id:
+        await callback.answer("Кнопка от старого раунда.", show_alert=True)
+        return
+    try:
+        idx = int(parts[2])
+    except ValueError:
+        idx = -1
     if not 0 <= idx < FIELD_SIZE:
         await callback.answer("Некорректная клетка.", show_alert=True)
         return
@@ -253,8 +292,12 @@ async def mines_reveal(callback: CallbackQuery):
     await callback.message.edit_text(field_text(game), reply_markup=field_kb(game))
 
 
-@router.callback_query(F.data == "mines_cashout", StateFilter("*"))
+@router.callback_query(F.data.startswith("mines_cashout"), StateFilter("*"))
 async def mines_cashout(callback: CallbackQuery):
+    active = registry.game(callback.from_user.id)
+    if not active or active.type != "mines" or callback.data != f"mines_cashout:{active.public_id}":
+        await callback.answer("Кнопка от старого раунда.", show_alert=True)
+        return
     result = cashout_game(callback.from_user.id)
     if not result:
         await callback.answer("Сначала откройте безопасные клетки или начните новую игру.", show_alert=True)
@@ -271,11 +314,15 @@ async def mines_cashout(callback: CallbackQuery):
     )
 
 
-@router.callback_query(F.data == "mines_cancel", StateFilter("*"))
+@router.callback_query(F.data.startswith("mines_cancel"), StateFilter("*"))
 async def mines_cancel(callback: CallbackQuery):
+    active = registry.game(callback.from_user.id)
+    if not active or active.type != "mines" or callback.data != f"mines_cancel:{active.public_id}":
+        await callback.answer("Кнопка от старого раунда.", show_alert=True)
+        return
     game = cancel_game(callback.from_user.id)
     await callback.answer()
     await callback.message.edit_text(
         "❌ Игра отменена. Ставка возвращена на баланс."
-        if game else "Игра уже завершена. Возврата ставки нет."
+        if game else "❌ Игра завершена. Ставка проиграна."
     )

@@ -300,6 +300,23 @@ class Database:
                 (user_id, amount, txn_type, description),
             )
 
+    def spend_balance(self, user_id: int, amount: int, description: str) -> bool:
+        """Atomically debit a stake only when the current balance covers it."""
+        if amount <= 0:
+            return False
+        with closing(self._connect()) as conn, conn:
+            updated = conn.execute(
+                "UPDATE users SET balance = balance - ? WHERE id = ? AND balance >= ?",
+                (amount, user_id, amount),
+            )
+            if updated.rowcount != 1:
+                return False
+            conn.execute(
+                "INSERT INTO transactions (user_id, amount, type, description) VALUES (?, ?, ?, ?)",
+                (user_id, -amount, "game_bet", description),
+            )
+            return True
+
     def add_rubies(self, user_id: int, amount: float) -> None:
         with closing(self._connect()) as conn, conn:
             conn.execute(
@@ -1033,6 +1050,23 @@ class PostgresDatabase:
                 "INSERT INTO transactions (user_id, amount, type, description) VALUES (%s, %s, %s, %s)",
                 (user_id, amount, txn_type, description),
             )
+
+    def spend_balance(self, user_id: int, amount: int, description: str) -> bool:
+        """Atomically debit a stake only when the current balance covers it."""
+        if amount <= 0:
+            return False
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE users SET balance = balance - %s WHERE id = %s AND balance >= %s",
+                (amount, user_id, amount),
+            )
+            if cur.rowcount != 1:
+                return False
+            cur.execute(
+                "INSERT INTO transactions (user_id, amount, type, description) VALUES (%s, %s, %s, %s)",
+                (user_id, -amount, "game_bet", description),
+            )
+            return True
 
     def add_rubies(self, user_id: int, amount: float) -> None:
         with self._cursor() as cur:

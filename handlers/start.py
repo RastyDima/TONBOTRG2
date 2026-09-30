@@ -110,7 +110,7 @@ async def cancel_action(callback: CallbackQuery, state: FSMContext):
     active = registry.game(callback.from_user.id)
     refunded = cancel_game(callback.from_user.id)
     await callback.answer()
-    text = ("❌ Раздача завершена. Ставка проиграна." if active and not refunded
+    text = ("❌ Игра завершена. Ставка проиграна." if active and not refunded
             else "❌ Игра отменена. Ставка возвращена." if refunded
             else "❌ Действие отменено.")
     await callback.message.edit_text(text)
@@ -123,7 +123,7 @@ async def cancel_command(message: Message, state: FSMContext):
         refunded = cancel_game(message.from_user.id)
         await message.answer(
             "❌ Игра отменена. Ставка возвращена на баланс."
-            if refunded else "❌ Раздача завершена. Ставка проиграна."
+            if refunded else "❌ Игра завершена. Ставка проиграна."
         )
     else:
         await message.answer("❌ Отменено.")

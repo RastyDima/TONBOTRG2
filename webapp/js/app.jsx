@@ -37,8 +37,16 @@ function api(path, options = {}) {
     if (token) headers['Authorization'] = `Bearer ${token}`;
     return fetch(`${API_BASE}${path}`, { ...options, headers: { ...headers, ...options.headers } })
         .then(async r => {
-            const data = await r.json();
-            if (!r.ok) throw new Error(data.error || 'request failed');
+            const data = await r.json().catch(() => ({ error: 'request failed' }));
+            if (!r.ok) {
+                if (r.status === 401) {
+                    localStorage.removeItem('webapp_token');
+                    window.dispatchEvent(new Event('webapp-auth-expired'));
+                }
+                const error = new Error(data.error || 'request failed');
+                error.status = r.status;
+                throw error;
+            }
             return data;
         });
 }
@@ -331,25 +339,131 @@ function ProfilePage({ profile, refreshProfile }) {
     );
 }
 
-function GamesPage() {
+function GamesPage({ profile, refreshProfile }) {
     const [mineCount, setMineCount] = useState(3);
+    const [bet, setBet] = useState('100');
     const [round, setRound] = useState(null);
-    const opened = round?.opened.length || 0;
-    const currentMultiplier = round ? MinesDemo.multiplier(round.mineCount, opened) : 1;
+    const [balance, setBalance] = useState(profile?.balance ?? 0);
+    const [maxBet, setMaxBet] = useState(250000);
+    const [otherGame, setOtherGame] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const [loadingRound, setLoadingRound] = useState(true);
+    const [error, setError] = useState('');
+    const opened = round?.opened?.length || 0;
     const playing = round?.status === 'playing';
-    const canCashout = round && MinesDemo.canCashout(round);
-    const nextChance = playing
-        ? Math.round((25 - round.mineCount - opened) / (25 - opened) * 100)
-        : null;
+    const currentMultiplier = round?.multiplier ?? 1;
 
-    let statusText = 'Выберите количество мин и начните пробный раунд.';
-    if (playing) statusText = 'Открывайте клетки. Чем дальше, тем выше множитель и риск.';
-    if (round?.status === 'lost') statusText = '💥 Мина! Раунд завершён. Попробуйте другую тактику.';
-    if (round?.status === 'cashed') statusText = `✨ Вы забрали ×${currentMultiplier} в демо-раунде.`;
-    if (round?.status === 'completed') statusText = `🏆 Раунд завершён с множителем ×${currentMultiplier}!`;
+    const loadRound = useCallback(async () => {
+        const data = await api('/mines');
+        setRound(data.round);
+        setBalance(data.balance);
+        setOtherGame(data.other_game);
+        setMaxBet(data.max_bet);
+        if (data.round?.status === 'playing') {
+            setMineCount(data.round.mine_count);
+            setBet(String(data.round.bet));
+        }
+    }, []);
 
-    const startRound = () => setRound(MinesDemo.createRound(mineCount));
-    const revealCell = (index) => setRound(previous => previous && MinesDemo.reveal(previous, index));
+    useEffect(() => {
+        let mounted = true;
+        api('/mines').then(data => {
+            if (!mounted) return;
+            setRound(data.round);
+            setBalance(data.balance);
+            setOtherGame(data.other_game);
+            setMaxBet(data.max_bet);
+            if (data.round?.status === 'playing') {
+                setMineCount(data.round.mine_count);
+                setBet(String(data.round.bet));
+            }
+        }).catch(() => {
+            if (mounted) setError('Не удалось загрузить игру. Попробуйте открыть раздел ещё раз.');
+        }).finally(() => {
+            if (mounted) setLoadingRound(false);
+        });
+        return () => { mounted = false; };
+    }, []);
+
+    const explainError = e => ({
+        'active game': 'Сначала завершите текущую игру в боте.',
+        'insufficient balance': 'Недостаточно TON для такой ставки.',
+        'round not found': 'Раунд уже завершён. Обновите игру.',
+        'cashout unavailable': 'Сначала откройте безопасные клетки до прибыльного множителя.',
+        'cell already opened': 'Эта клетка уже открыта.',
+    }[e.message] || 'Не удалось выполнить ход. Попробуйте ещё раз.');
+
+    const applyResult = data => {
+        setRound(data.round);
+        setBalance(data.balance);
+        setOtherGame(null);
+        if (data.round?.status === 'playing') {
+            setMineCount(data.round.mine_count);
+            setBet(String(data.round.bet));
+        }
+        refreshProfile();
+    };
+
+    const startRound = async () => {
+        const amount = Number(bet);
+        if (!Number.isSafeInteger(amount) || amount < 1 || amount > maxBet) {
+            setError(`Укажите ставку от 1 до ${formatNumber(maxBet)} TON.`);
+            return;
+        }
+        if (amount > balance) {
+            setError('Недостаточно TON для такой ставки.');
+            return;
+        }
+        setBusy(true);
+        setError('');
+        try {
+            applyResult(await api('/mines/start', {
+                method: 'POST', body: JSON.stringify({ bet: amount, mine_count: mineCount }),
+            }));
+        } catch (e) {
+            setError(explainError(e));
+            await loadRound().catch(() => {});
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const act = async (action, extra = {}) => {
+        if (!round || busy) return;
+        setBusy(true);
+        setError('');
+        try {
+            applyResult(await api(`/mines/${action}`, {
+                method: 'POST', body: JSON.stringify({ round_id: round.id, ...extra }),
+            }));
+        } catch (e) {
+            setError(explainError(e));
+            await loadRound().catch(() => {});
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const cancelRound = () => {
+        if (round?.can_refund) {
+            act('cancel');
+            return;
+        }
+        const prompt = 'После открытия клетки ставка сгорит. Сдаться?';
+        const tg = window.Telegram?.WebApp;
+        if (tg?.showConfirm) tg.showConfirm(prompt, confirmed => confirmed && act('cancel'));
+        else if (window.confirm(prompt)) act('cancel');
+    };
+
+    let statusText = 'Укажите ставку и количество мин, затем начните раунд.';
+    if (playing) statusText = round.can_cashout
+        ? `Можно забрать ${formatNumber(round.payout)} TON или рискнуть ещё раз.`
+        : 'Открывайте клетки. После первого хода отмена сжигает ставку.';
+    if (round?.status === 'lost') statusText = round.exploded === null
+        ? 'Вы сдались. Ставка проиграна.'
+        : '💥 Мина! Ставка проиграна.';
+    if (round?.status === 'won') statusText = `🏆 Выигрыш: ${formatNumber(round.payout)} TON (×${currentMultiplier}).`;
+    if (round?.status === 'cancelled') statusText = 'Раунд отменён до первого хода. Ставка возвращена.';
     return (
         <div className="page games-page">
             <div className="page-intro"><span>ИГРОВАЯ ЗОНА</span><span className="page-intro-mark">01 / 04</span></div>
@@ -357,42 +471,48 @@ function GamesPage() {
             <div className="mines-demo card">
                 <div className="mines-demo-header">
                     <div>
-                        <div className="mines-demo-eyebrow">ПРОБНЫЙ РЕЖИМ</div>
+                        <div className="mines-demo-eyebrow">ИГРА НА TON</div>
                         <h2>💣 Мины</h2>
                         <p>Найдите кристаллы и вовремя заберите множитель.</p>
                     </div>
-                    <span className="mines-demo-badge">Без ставок</span>
+                    <span className="mines-demo-badge">До ×8</span>
                 </div>
 
+                <div className="mines-balance">Баланс <strong>{formatNumber(balance)} TON</strong></div>
                 <div className="mines-demo-settings">
+                    <label className="mines-bet-label" htmlFor="mines-bet">Ставка, TON</label>
+                    <input id="mines-bet" className="mines-bet-input" type="number" min="1" max={maxBet}
+                        step="1" inputMode="numeric" value={bet} disabled={playing || busy}
+                        onChange={event => setBet(event.target.value)} />
+                    <div className="mines-bet-hint">От 1 до {formatNumber(maxBet)} TON</div>
                     <div className="mines-demo-setting-label">
-                        <span>Количество мин</span><strong>{mineCount} / 10</strong>
+                        <span>Количество мин</span><strong>{playing ? round.mine_count : mineCount} / 10</strong>
                     </div>
                     <input type="range" min="1" max="10" value={mineCount}
-                        disabled={playing} onChange={event => setMineCount(Number(event.target.value))}
+                        disabled={playing || busy} onChange={event => setMineCount(Number(event.target.value))}
                         aria-label="Количество мин" />
                     <div className="mines-demo-scale"><span>Спокойнее</span><span>Рискованнее</span></div>
                 </div>
 
                 <div className="mines-demo-stats">
-                    <div><span>Открыто</span><strong>{opened} / {round ? 25 - round.mineCount : 25 - mineCount}</strong></div>
-                    <div><span>Множитель</span><strong>×{round?.status === 'lost' ? '0' : currentMultiplier}</strong></div>
-                    <div><span>Следующий ход</span><strong>{nextChance === null ? '—' : `${nextChance}%`}</strong></div>
+                    <div><span>Открыто</span><strong>{opened} / {round?.safe_total ?? 25 - mineCount}</strong></div>
+                    <div><span>Множитель</span><strong>×{currentMultiplier}</strong></div>
+                    <div><span>Следующий ход</span><strong>{playing ? `${round.next_chance}%` : '—'}</strong></div>
                 </div>
 
                 <div className="mines-demo-board" role="grid" aria-label="Поле мин 5 на 5">
                     {Array.from({ length: 25 }, (_, index) => {
-                        const openedCell = round?.opened.includes(index);
-                        const shownMine = round && round.status !== 'playing' && round.mines.includes(index);
+                        const openedCell = round?.opened?.includes(index);
+                        const shownMine = round?.mines?.includes(index);
                         const exploded = round?.exploded === index;
                         return (
                             <button key={index} type="button" role="gridcell"
                                 className={`mines-demo-cell${openedCell ? ' is-gem' : ''}${shownMine ? ' is-mine' : ''}${exploded ? ' is-exploded' : ''}`}
-                                disabled={!playing || openedCell}
+                                disabled={!playing || openedCell || busy}
                                 aria-label={openedCell ? `Клетка ${index + 1}: кристалл`
                                     : shownMine ? `Клетка ${index + 1}: мина`
                                     : `Клетка ${index + 1}: закрыта`}
-                                onClick={() => revealCell(index)}>
+                                onClick={() => act('reveal', { index })}>
                                 {openedCell ? '💎' : shownMine ? '💣' : '✦'}
                             </button>
                         );
@@ -400,18 +520,29 @@ function GamesPage() {
                 </div>
 
                 <p className="mines-demo-status" aria-live="polite">{statusText}</p>
+                {error && <p className="mines-error" role="alert">{error}</p>}
+                {otherGame && <p className="mines-error">У вас уже идёт другая игра в боте. Завершите её перед новой ставкой.</p>}
                 <div className="mines-demo-actions">
-                    <button type="button" className="btn btn-secondary" onClick={startRound}>
-                        {round ? '↻ Новый раунд' : 'Начать раунд'}
-                    </button>
-                    {playing && (
-                        <button type="button" className="btn btn-primary" disabled={!canCashout}
-                            onClick={() => setRound(previous => MinesDemo.cashout(previous))}>
-                            Забрать ×{currentMultiplier}
+                    {playing ? <>
+                        <button type="button" className="btn btn-primary" disabled={!round.can_cashout || busy}
+                            onClick={() => act('cashout')}>
+                            {round.can_cashout ? `Забрать ${formatNumber(round.payout)} TON` : 'Откройте безопасную клетку'}
                         </button>
-                    )}
+                        <button type="button" className="btn btn-secondary" disabled={busy} onClick={cancelRound}>
+                            {round.can_refund ? 'Отменить' : 'Сдаться'}
+                        </button>
+                    </> : <button type="button" className="btn btn-primary"
+                        disabled={loadingRound || busy || !!otherGame} onClick={startRound}>
+                        {busy ? 'Подождите...' : round ? '↻ Новый раунд' : 'Поставить и играть'}
+                    </button>}
                 </div>
-                <p className="mines-demo-note">Это демо: баланс, опыт и статистика бота не меняются.</p>
+                {round?.seed_hash && <details className="mines-proof">
+                    <summary>Проверка честности раунда</summary>
+                    <span>Хеш семени, зафиксированный до первого хода:</span>
+                    <code>{round.seed_hash}</code>
+                    {round.seed && <><span>Семя после завершения:</span><code>{round.seed}</code></>}
+                </details>}
+                <p className="mines-demo-note">Ставка и выигрыш учитываются в балансе бота. После безопасного хода отмена сжигает ставку.</p>
             </div>
             <div className="games-grid">
                 {[
@@ -763,10 +894,15 @@ function AuthScreen({ onAuth }) {
 
     useEffect(() => {
         const tg = window.Telegram?.WebApp;
-        const data = tg?.initData || tg?.initDataUnsafe;
+        const data = tg?.initData;
         if (data) {
             setLoading(true);
-            onAuth(data);
+            onAuth(data).then(ok => {
+                if (!ok) {
+                    setLoading(false);
+                    setError(true);
+                }
+            });
         } else {
             setError(true);
         }
@@ -775,9 +911,14 @@ function AuthScreen({ onAuth }) {
     const handleAuth = () => {
         setLoading(true);
         const tg = window.Telegram?.WebApp;
-        const data = tg?.initData || tg?.initDataUnsafe;
+        const data = tg?.initData;
         if (data) {
-            onAuth(data);
+            onAuth(data).then(ok => {
+                if (!ok) {
+                    setLoading(false);
+                    setError(true);
+                }
+            });
         } else {
             setLoading(false);
             setError(true);
@@ -824,20 +965,14 @@ function App() {
     useEffect(() => {
         const token = localStorage.getItem('webapp_token');
         if (token) {
-            try {
-                const payload = JSON.parse(token);
-                setUser(payload);
-                api('/profile').then(p => {
-                    setProfile(p);
-                    setLoading(false);
-                }).catch(() => {
-                    localStorage.removeItem('webapp_token');
-                    setLoading(false);
-                });
-            } catch {
+            api('/profile').then(p => {
+                setProfile(p);
+                setUser({ user_id: p.user_id });
+            }).catch(() => {
                 localStorage.removeItem('webapp_token');
+            }).finally(() => {
                 setLoading(false);
-            }
+            });
         } else {
             setLoading(false);
         }
@@ -849,6 +984,15 @@ function App() {
         }
     }, []);
 
+    useEffect(() => {
+        const resetAuth = () => {
+            setUser(null);
+            setProfile(null);
+        };
+        window.addEventListener('webapp-auth-expired', resetAuth);
+        return () => window.removeEventListener('webapp-auth-expired', resetAuth);
+    }, []);
+
     const handleAuth = async (initData) => {
         try {
             const res = await fetch(`${API_BASE}/auth`, {
@@ -857,15 +1001,16 @@ function App() {
                 body: JSON.stringify({ initData }),
             });
             const data = await res.json();
-            if (data.token) {
-                localStorage.setItem('webapp_token', data.token);
-                setUser({ user_id: data.user_id });
-                api('/profile').then(setProfile);
-            } else {
-                console.error('Auth failed:', data);
-            }
+            if (!res.ok || !data.token) return false;
+            localStorage.setItem('webapp_token', data.token);
+            const loadedProfile = await api('/profile');
+            setProfile(loadedProfile);
+            setUser({ user_id: loadedProfile.user_id });
+            return true;
         } catch (e) {
             console.error('Auth error:', e);
+            localStorage.removeItem('webapp_token');
+            return false;
         }
     };
 
@@ -881,7 +1026,7 @@ function App() {
             </div>
 
             {page === 'profile' && <ProfilePage profile={profile} refreshProfile={refreshProfile} />}
-            {page === 'games' && <GamesPage />}
+            {page === 'games' && <GamesPage profile={profile} refreshProfile={refreshProfile} />}
             {page === 'shop' && <ShopPage profile={profile} refreshProfile={refreshProfile} />}
             {page === 'ref' && <ReferralPage profile={profile} />}
             {page === 'leaderboard' && <LeaderboardPage profile={profile} />}
@@ -891,16 +1036,4 @@ function App() {
     );
 }
 
-const demoOnly = new URLSearchParams(window.location.search).get('demo') === 'mines';
-ReactDOM.createRoot(document.getElementById('root')).render(
-    demoOnly ? (
-        <div className="app">
-            <div className="header">
-                <div className="brand-mark" aria-hidden="true">✦</div>
-                <div className="brand-copy"><h1>TON CASINO</h1><div className="subtitle">ПРОБНАЯ ВЕРСИЯ · БЕЗ СТАВОК</div></div>
-                <div className="header-spark" aria-hidden="true">✧</div>
-            </div>
-            <GamesPage />
-        </div>
-    ) : <App />
-);
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);

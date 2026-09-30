@@ -1,14 +1,16 @@
 """WebApp API routes for Telegram Mini App."""
-import json
 import logging
 from pathlib import Path
 
 from aiohttp import web
 
+from config import MAX_BET, MAX_GAME_MULTIPLIER, MIN_BET
 from database import db
+from games.mines import FIELD_SIZE, MAX_MINES, MIN_MINES, MinesGame
 from handlers.shop import SHOP_ITEMS, FRAME_BY_ID, TITLE_BY_ID, ALL_BY_ID
 from utils.achievements import ACHIEVEMENTS
-from webapp_auth import validate_telegram_init_data
+from utils.game_registry import cancel_game, cashout_game, lose_game, registry
+from webapp_auth import issue_session_token, validate_telegram_init_data, verify_session_token
 
 logger = logging.getLogger(__name__)
 
@@ -23,21 +25,48 @@ def _json_response(data, status=200):
 async def _auth_user(request):
     """Extract and validate user from Bearer token. Returns user dict or None."""
     token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-    if not token:
-        token = request.query.get("token", "")
-    if not token:
+    user_id = verify_session_token(token)
+    if user_id is None:
         return None
-    try:
-        payload = json.loads(token)
-        user_id = payload.get("user_id")
-        if not user_id:
-            return None
-        user = db.get_user(user_id)
-        if not user or user.get("is_blocked"):
-            return None
-        return user
-    except (json.JSONDecodeError, TypeError):
+    user = db.get_user(user_id)
+    if not user or user.get("is_blocked"):
         return None
+    return user
+
+
+def _mines_snapshot(game: MinesGame, status: str | None = None) -> dict:
+    status = status or ("won" if game.cashed_out else "lost" if game.lost else "playing")
+    finished = status != "playing"
+    opened = len(game.revealed)
+    return {
+        "id": game.public_id,
+        "status": status,
+        "bet": game.bet,
+        "mine_count": game.mines,
+        "opened": sorted(game.revealed),
+        "safe_total": game.safe_total,
+        "multiplier": 0 if status == "lost" else game.multiplier,
+        "payout": game.payout if status in ("playing", "won") else 0,
+        "can_cashout": status == "playing" and game.can_cashout,
+        "can_refund": status == "playing" and game.can_refund,
+        "next_chance": (
+            round((FIELD_SIZE - game.mines - opened) / (FIELD_SIZE - opened) * 100, 1)
+            if status == "playing" and opened < game.safe_total else None
+        ),
+        "mines": sorted(game.mine_positions) if finished else None,
+        "exploded": getattr(game, "exploded", None) if finished else None,
+        "seed": game.seed if finished else None,
+        "seed_hash": game.seed_hash,
+    }
+
+
+def _mines_active(user_id: int, round_id: str | None = None) -> MinesGame | None:
+    game = registry.game(user_id)
+    if not game or game.type != "mines" or game.is_over:
+        return None
+    if round_id is not None and game.public_id != round_id:
+        return None
+    return game
 
 
 def register_webapp_routes(app: web.Application) -> None:
@@ -66,13 +95,15 @@ def register_webapp_routes(app: web.Application) -> None:
         except Exception:
             return _json_response({"error": "bad request"}, 400)
 
+        if not isinstance(body, dict):
+            return _json_response({"error": "bad request"}, 400)
         init_data = body.get("initData", "")
         user_data = validate_telegram_init_data(init_data)
         if not user_data:
             return _json_response({"error": "invalid init data"}, 401)
 
         user_id = user_data["id"]
-        username = user_data.get("username", "").lower() or None
+        username = (user_data.get("username") or "").lower() or None
         first_name = user_data.get("first_name", "")
 
         existing = db.get_user(user_id)
@@ -81,8 +112,127 @@ def register_webapp_routes(app: web.Application) -> None:
         else:
             db.register_user(user_id, username, first_name)
 
-        token = json.dumps({"user_id": user_id})
+        token = issue_session_token(user_id)
         return _json_response({"token": token, "user_id": user_id})
+
+    # --- Real Mines: the server owns the board, bet and settlement ---
+
+    async def api_mines_state(request):
+        user = await _auth_user(request)
+        if not user:
+            return _json_response({"error": "unauthorized"}, 401)
+        active = registry.get(user["id"])
+        game = _mines_active(user["id"])
+        return _json_response({
+            "round": _mines_snapshot(game) if game else None,
+            "other_game": active["type"] if active and not game else None,
+            "balance": user["balance"],
+            "max_bet": MAX_BET,
+        })
+
+    async def api_mines_start(request):
+        user = await _auth_user(request)
+        if not user:
+            return _json_response({"error": "unauthorized"}, 401)
+        try:
+            body = await request.json()
+        except Exception:
+            return _json_response({"error": "bad request"}, 400)
+        if not isinstance(body, dict):
+            return _json_response({"error": "bad request"}, 400)
+        bet, mine_count = body.get("bet"), body.get("mine_count")
+        if (type(bet) is not int or not MIN_BET <= bet <= MAX_BET
+                or type(mine_count) is not int or not MIN_MINES <= mine_count <= MAX_MINES):
+            return _json_response({"error": "invalid bet or mine count"}, 400)
+        if registry.is_active(user["id"]):
+            return _json_response({"error": "active game"}, 409)
+        fresh_user = db.get_user(user["id"])
+        if bet > fresh_user["balance"]:
+            return _json_response({"error": "insufficient balance"}, 402)
+        game = MinesGame(user["id"], bet, mine_count)
+        if not registry.register(user["id"], "mines", game):
+            return _json_response({"error": "active game"}, 409)
+        try:
+            spent = db.spend_balance(user["id"], bet, "Ставка в игре Мины")
+        except Exception:
+            registry.release(user["id"])
+            raise
+        if not spent:
+            registry.release(user["id"])
+            return _json_response({"error": "insufficient balance"}, 402)
+        return _json_response({
+            "round": _mines_snapshot(game),
+            "balance": db.get_user(user["id"])["balance"],
+        })
+
+    async def api_mines_reveal(request):
+        user = await _auth_user(request)
+        if not user:
+            return _json_response({"error": "unauthorized"}, 401)
+        try:
+            body = await request.json()
+        except Exception:
+            return _json_response({"error": "bad request"}, 400)
+        if not isinstance(body, dict):
+            return _json_response({"error": "bad request"}, 400)
+        round_id, index = body.get("round_id"), body.get("index")
+        if not isinstance(round_id, str) or type(index) is not int or not 0 <= index < FIELD_SIZE:
+            return _json_response({"error": "invalid move"}, 400)
+        game = _mines_active(user["id"], round_id)
+        if not game:
+            return _json_response({"error": "round not found"}, 409)
+        if index in game.revealed:
+            return _json_response({"error": "cell already opened", "round": _mines_snapshot(game)}, 409)
+        if index in game.mine_positions:
+            game.exploded = index
+            lose_game(user["id"])
+            return _json_response({
+                "round": _mines_snapshot(game),
+                "balance": db.get_user(user["id"])["balance"],
+            })
+        game.revealed.add(index)
+        if game.safe_revealed == game.safe_total or game.multiplier >= MAX_GAME_MULTIPLIER:
+            cashout_game(user["id"])
+        return _json_response({
+            "round": _mines_snapshot(game),
+            "balance": db.get_user(user["id"])["balance"],
+        })
+
+    async def api_mines_cashout(request):
+        user = await _auth_user(request)
+        if not user:
+            return _json_response({"error": "unauthorized"}, 401)
+        try:
+            body = await request.json()
+        except Exception:
+            return _json_response({"error": "bad request"}, 400)
+        round_id = body.get("round_id") if isinstance(body, dict) else None
+        game = _mines_active(user["id"], round_id) if isinstance(round_id, str) else None
+        if not game or not game.can_cashout:
+            return _json_response({"error": "cashout unavailable"}, 409)
+        cashout_game(user["id"])
+        return _json_response({
+            "round": _mines_snapshot(game),
+            "balance": db.get_user(user["id"])["balance"],
+        })
+
+    async def api_mines_cancel(request):
+        user = await _auth_user(request)
+        if not user:
+            return _json_response({"error": "unauthorized"}, 401)
+        try:
+            body = await request.json()
+        except Exception:
+            return _json_response({"error": "bad request"}, 400)
+        round_id = body.get("round_id") if isinstance(body, dict) else None
+        game = _mines_active(user["id"], round_id) if isinstance(round_id, str) else None
+        if not game:
+            return _json_response({"error": "round not found"}, 409)
+        refunded = cancel_game(user["id"])
+        return _json_response({
+            "round": _mines_snapshot(game, "cancelled" if refunded else "lost"),
+            "balance": db.get_user(user["id"])["balance"],
+        })
 
     # --- Profile ---
 
@@ -192,7 +342,11 @@ def register_webapp_routes(app: web.Application) -> None:
         except Exception:
             return _json_response({"error": "bad request"}, 400)
 
+        if not isinstance(body, dict):
+            return _json_response({"error": "bad request"}, 400)
         item_id = body.get("item_id", "")
+        if not isinstance(item_id, str):
+            return _json_response({"error": "invalid item"}, 400)
         item = ALL_BY_ID.get(item_id)
         if not item:
             return _json_response({"error": "item not found"}, 404)
@@ -224,7 +378,13 @@ def register_webapp_routes(app: web.Application) -> None:
         except Exception:
             return _json_response({"error": "bad request"}, 400)
 
+        if not isinstance(body, dict):
+            return _json_response({"error": "bad request"}, 400)
         item_id = body.get("item_id", "")
+        if not isinstance(item_id, str):
+            return _json_response({"error": "invalid item"}, 400)
+        if item_id and (item_id not in ALL_BY_ID or not db.owns_item(user["id"], item_id)):
+            return _json_response({"error": "item not owned"}, 403)
         if item_id.startswith("frame"):
             db.set_active_frame(user["id"], item_id)
         elif item_id.startswith("title"):
@@ -294,6 +454,11 @@ def register_webapp_routes(app: web.Application) -> None:
 
     # Register API routes
     app.router.add_post(f"{WEBAPP_API_PREFIX}/api/auth", api_auth)
+    app.router.add_get(f"{WEBAPP_API_PREFIX}/api/mines", api_mines_state)
+    app.router.add_post(f"{WEBAPP_API_PREFIX}/api/mines/start", api_mines_start)
+    app.router.add_post(f"{WEBAPP_API_PREFIX}/api/mines/reveal", api_mines_reveal)
+    app.router.add_post(f"{WEBAPP_API_PREFIX}/api/mines/cashout", api_mines_cashout)
+    app.router.add_post(f"{WEBAPP_API_PREFIX}/api/mines/cancel", api_mines_cancel)
     app.router.add_get(f"{WEBAPP_API_PREFIX}/api/profile", api_profile)
     app.router.add_post(f"{WEBAPP_API_PREFIX}/api/profile/showcase", api_showcase_toggle)
     app.router.add_get(f"{WEBAPP_API_PREFIX}/api/shop", api_shop)

@@ -312,13 +312,32 @@ class GameBalanceTests(unittest.TestCase):
 
         class FakeCallback:
             from_user = FakeUser()
-            data = "mines_cell:25"
+            data = f"mines_cell:{game.public_id}:25"
 
             async def answer(self, text, **kwargs):
                 assert text and kwargs.get("show_alert")
 
         asyncio.run(mines_reveal(FakeCallback()))
         self.assertEqual(game.safe_revealed, 0)
+
+    def test_mines_rejects_buttons_from_old_round(self):
+        from handlers.mines import mines_cancel, mines_cashout, mines_reveal
+
+        game = MinesGame(991234, 100, 3)
+        self.assertTrue(registry.register(991234, "mines", game))
+        safe = next(index for index in range(25) if index not in game.mine_positions)
+        for handler, data in (
+            (mines_reveal, f"mines_cell:old-round:{safe}"),
+            (mines_cashout, "mines_cashout:old-round"),
+            (mines_cancel, "mines_cancel:old-round"),
+        ):
+            callback = SimpleNamespace(
+                from_user=SimpleNamespace(id=991234), data=data, answer=AsyncMock(),
+            )
+            asyncio.run(handler(callback))
+            callback.answer.assert_awaited_once()
+            self.assertIs(registry.game(991234), game)
+            self.assertEqual(game.safe_revealed, 0)
 
 
 if __name__ == "__main__":

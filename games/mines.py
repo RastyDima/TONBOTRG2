@@ -1,6 +1,7 @@
 import math
 import random
 import secrets
+import hashlib
 from math import comb
 
 from config import MAX_GAME_MULTIPLIER
@@ -36,6 +37,8 @@ class MinesGame:
         # старта игры. Пока игра идёт, seed не показывается (иначе мины можно
         # вычислить), а после конца отображается для проверки честности.
         self.seed = secrets.token_hex(16)
+        self.seed_hash = hashlib.sha256(self.seed.encode()).hexdigest()
+        self.public_id = secrets.token_urlsafe(12)
         rng = random.Random(int(self.seed, 16))
         self.mine_positions = set(rng.sample(range(FIELD_SIZE), mines))
         self.revealed = set()
@@ -57,6 +60,10 @@ class MinesGame:
     @property
     def can_cashout(self) -> bool:
         return self.safe_revealed > 0 and self.multiplier > 1.0 and not self.is_over
+
+    @property
+    def can_refund(self) -> bool:
+        return self.safe_revealed == 0 and not self.is_over
 
     @property
     def multiplier(self) -> float:
