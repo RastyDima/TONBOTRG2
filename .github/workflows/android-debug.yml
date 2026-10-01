@@ -8,6 +8,10 @@ on:
       - '.github/workflows/android-debug.yml'
   workflow_dispatch:
 
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -53,7 +57,7 @@ jobs:
         run: |
           cp android/app/build/outputs/apk/release/app-release.apk android/ton-casino-0.2.apk
           cp android/ton-casino-0.2.apk android/ton-casino-test-0.1.apk
-          git add android/ton-casino-0.2.apk android/ton-casino-test-0.1.apk
+          git add -f android/ton-casino-0.2.apk android/ton-casino-test-0.1.apk
           if git diff --cached --quiet; then exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
