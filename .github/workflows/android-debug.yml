@@ -1,4 +1,4 @@
-name: Android test APK
+name: Android signed APK
 
 on:
   push:
@@ -22,18 +22,44 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - run: chmod +x gradlew
         working-directory: android
-      - run: ./gradlew --no-daemon assembleDebug
+      - name: Restore release key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$KEYSTORE_BASE64"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/ton-casino-release.p12"
+      - name: Build signed APK
+        run: ./gradlew --no-daemon assembleRelease
         working-directory: android
+        env:
+          ANDROID_RELEASE_KEYSTORE: ${{ runner.temp }}/ton-casino-release.p12
+          ANDROID_RELEASE_PASSWORD: ${{ secrets.ANDROID_RELEASE_PASSWORD }}
+      - name: Verify APK signature
+        run: "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose android/app/build/outputs/apk/release/app-release.apk
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install and open on Android 15 emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: bash android/ci-smoke.sh
       - name: Publish tested APK
         run: |
-          cp android/app/build/outputs/apk/debug/app-debug.apk android/ton-casino-test-0.1.apk
-          git add android/ton-casino-test-0.1.apk
+          cp android/app/build/outputs/apk/release/app-release.apk android/ton-casino-0.2.apk
+          cp android/ton-casino-0.2.apk android/ton-casino-test-0.1.apk
+          git add android/ton-casino-0.2.apk android/ton-casino-test-0.1.apk
           if git diff --cached --quiet; then exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "Publish Gradle-built Android test APK [skip ci]"
+          git commit -m "Publish signed Android APK [skip ci]"
           git push origin HEAD:main
       - uses: actions/upload-artifact@v4
         with:
-          name: ton-casino-android-test
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: ton-casino-android-signed
+          path: android/app/build/outputs/apk/release/app-release.apk

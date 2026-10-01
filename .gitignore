@@ -14,3 +14,7 @@ bot.err.log
 # OS
 .DS_Store
 Thumbs.db
+
+# Local Android release key backup (the CI copy lives in GitHub Actions secrets)
+android/signing/*.p12
+android/signing/credentials.txt

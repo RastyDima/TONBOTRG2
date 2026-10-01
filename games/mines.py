@@ -2,6 +2,7 @@ import math
 import random
 import secrets
 import hashlib
+import json
 from math import comb
 
 from config import MAX_GAME_MULTIPLIER
@@ -26,7 +27,8 @@ def get_house_edge() -> float:
 class MinesGame:
     """Игра «Мины»: поле 5×5, меняющаяся вероятность и множитель."""
 
-    def __init__(self, user_id: int, bet: int, mines: int):
+    def __init__(self, user_id: int, bet: int, mines: int, *, seed=None, public_id=None,
+                 house_edge=None):
         if not MIN_MINES <= mines <= MAX_MINES:
             raise ValueError("Некорректное количество мин")
         self.type = "mines"
@@ -36,14 +38,25 @@ class MinesGame:
         # Provably fair: позиция мин задаётся крипто-случайным seed'ом в момент
         # старта игры. Пока игра идёт, seed не показывается (иначе мины можно
         # вычислить), а после конца отображается для проверки честности.
-        self.seed = secrets.token_hex(16)
+        self.seed = seed or secrets.token_hex(16)
         self.seed_hash = hashlib.sha256(self.seed.encode()).hexdigest()
-        self.public_id = secrets.token_urlsafe(12)
+        self.public_id = public_id or secrets.token_urlsafe(12)
+        self.house_edge = get_house_edge() if house_edge is None else house_edge
         rng = random.Random(int(self.seed, 16))
         self.mine_positions = set(rng.sample(range(FIELD_SIZE), mines))
         self.revealed = set()
         self.lost = False
         self.cashed_out = False
+        self.persisted = False
+
+    @classmethod
+    def from_record(cls, record: dict) -> "MinesGame":
+        game = cls(record["user_id"], record["bet"], record["mine_count"],
+                   seed=record["seed"], public_id=record["round_id"],
+                   house_edge=record["house_edge"])
+        game.revealed = set(json.loads(record["revealed"]))
+        game.persisted = True
+        return game
 
     @property
     def is_over(self) -> bool:
@@ -71,7 +84,7 @@ class MinesGame:
         if k == 0:
             return 1.0
         p = comb(FIELD_SIZE - k, self.mines) / comb(FIELD_SIZE, self.mines)
-        return min(MAX_GAME_MULTIPLIER, round(get_house_edge() / p, 2))
+        return min(MAX_GAME_MULTIPLIER, round(self.house_edge / p, 2))
 
     @property
     def payout(self) -> int:

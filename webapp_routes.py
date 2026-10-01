@@ -192,13 +192,16 @@ def register_webapp_routes(app: web.Application) -> None:
         if not registry.register(user["id"], "mines", game):
             return _json_response({"error": "active game"}, 409)
         try:
-            spent = db.spend_balance(user["id"], bet, "Ставка в игре Мины")
+            spent = db.start_mines_round(game)
         except Exception:
             registry.release(user["id"])
             raise
         if not spent:
             registry.release(user["id"])
-            return _json_response({"error": "insufficient balance"}, 402)
+            if db.get_user(user["id"])["balance"] < bet:
+                return _json_response({"error": "insufficient balance"}, 402)
+            return _json_response({"error": "active game"}, 409)
+        game.persisted = True
         return _json_response({
             "round": _mines_snapshot(game),
             "balance": db.get_user(user["id"])["balance"],
@@ -230,6 +233,9 @@ def register_webapp_routes(app: web.Application) -> None:
                 "balance": db.get_user(user["id"])["balance"],
             })
         game.revealed.add(index)
+        if not db.save_mines_round(game):
+            registry.release(user["id"])
+            return _json_response({"error": "round changed"}, 409)
         if game.safe_revealed == game.safe_total or game.multiplier >= MAX_GAME_MULTIPLIER:
             cashout_game(user["id"])
         return _json_response({

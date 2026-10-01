@@ -27,6 +27,7 @@ from config import BOT_TOKEN  # noqa: E402
 from database import db  # noqa: E402
 from mobile_pairing import claim_pairing  # noqa: E402
 from handlers.start import cmd_start  # noqa: E402
+from games.mines import MinesGame  # noqa: E402
 from utils.game_registry import registry  # noqa: E402
 from webapp_auth import issue_session_token, verify_session_token  # noqa: E402
 from webapp_routes import register_webapp_routes  # noqa: E402
@@ -220,6 +221,47 @@ class WebappMinesTests(unittest.IsolatedAsyncioTestCase):
         })
         self.assertEqual((await response.json())["round"]["status"], "lost")
         self.assertEqual(db.get_user(self.user_id)["balance"], self.before - 100)
+
+    async def test_round_survives_process_restart_and_settles_once(self):
+        data = await self.start_round(bet=200)
+        original = registry.game(self.user_id)
+        safe = next(index for index in range(25) if index not in original.mine_positions)
+        response = await self.post("/app/api/mines/reveal", {
+            "round_id": data["round"]["id"], "index": safe,
+        })
+        self.assertEqual(response.status, 200)
+        self.assertIsNotNone(db.get_active_mines(self.user_id))
+
+        registry.release(self.user_id)  # Simulate losing in-memory state on deploy.
+        response = await self.client.get("/app/api/mines", headers=self.headers)
+        restored = (await response.json())["round"]
+        self.assertEqual(restored["id"], data["round"]["id"])
+        self.assertEqual(restored["seed_hash"], data["round"]["seed_hash"])
+        self.assertIn(safe, restored["opened"])
+        self.assertEqual(registry.game(self.user_id).mine_positions, original.mine_positions)
+
+        response = await self.post("/app/api/mines/cashout", {"round_id": restored["id"]})
+        self.assertEqual(response.status, 200)
+        payout = (await response.json())["round"]["payout"]
+        self.assertEqual(db.get_user(self.user_id)["balance"], self.before - 200 + payout)
+        self.assertIsNone(db.get_active_mines(self.user_id))
+        registry.release(self.user_id)
+        response = await self.post("/app/api/mines/cashout", {"round_id": restored["id"]})
+        self.assertEqual(response.status, 409)
+        self.assertEqual(db.get_user(self.user_id)["balance"], self.before - 200 + payout)
+
+    async def test_second_stored_round_cannot_charge_again(self):
+        data = await self.start_round(bet=100)
+        second = MinesGame(self.user_id, 100, 3)
+        self.assertFalse(db.start_mines_round(second))
+        self.assertEqual(db.get_user(self.user_id)["balance"], self.before - 100)
+        registry.release(self.user_id)
+        self.assertTrue(registry.is_active(self.user_id))
+        response = await self.post("/app/api/mines/cancel", {
+            "round_id": data["round"]["id"],
+        })
+        self.assertEqual(response.status, 200)
+        self.assertEqual(db.get_user(self.user_id)["balance"], self.before)
 
     async def test_invalid_bets_and_unauthorized_start(self):
         for body in ({"bet": True, "mine_count": 3}, {"bet": 250001, "mine_count": 3},

@@ -11,7 +11,7 @@ class GameRegistry:
         self._active = {}
 
     def register(self, user_id: int, game_type: str, game) -> bool:
-        if user_id in self._active:
+        if self.get(user_id):
             return False
         self._active[user_id] = {"type": game_type, "game": game}
         return True
@@ -20,10 +20,17 @@ class GameRegistry:
         self._active.pop(user_id, None)
 
     def is_active(self, user_id: int) -> bool:
-        return user_id in self._active
+        return self.get(user_id) is not None
 
     def get(self, user_id: int) -> dict | None:
-        return self._active.get(user_id)
+        entry = self._active.get(user_id)
+        if entry is None:
+            record = db.get_active_mines(user_id)
+            if record:
+                from games.mines import MinesGame
+                entry = {"type": "mines", "game": MinesGame.from_record(record)}
+                self._active[user_id] = entry
+        return entry
 
     def game(self, user_id: int):
         entry = self._active.get(user_id)
@@ -124,17 +131,23 @@ def cashout_game(user_id: int):
     game = entry["game"]
     if game.is_over or not getattr(game, "can_cashout", True):
         return None
-    game.cashed_out = True
     payout = game.payout
     label = GAME_LABELS.get(entry["type"], entry["type"])
-    db.add_balance(user_id, payout, "game_win", f"Выигрыш в игре {label}")
-    if payout >= 50000:
-        rubies = round(payout / 50000 * 0.1, 2)
-        db.add_rubies(user_id, rubies)
+    if entry["type"] == "mines" and game.persisted:
+        if not db.settle_mines_round(game, "win"):
+            registry.release(user_id)
+            return None
+    else:
+        db.add_balance(user_id, payout, "game_win", f"Выигрыш в игре {label}")
+        if payout >= 50000:
+            rubies = round(payout / 50000 * 0.1, 2)
+            db.add_rubies(user_id, rubies)
+    game.cashed_out = True
     _process_referral_bet(user_id, game.bet)
     registry.release(user_id)
-    db.add_game(user_id, entry["type"], game.bet, payout, "win")
-    db.update_stats(user_id, "win", game.bet, payout)
+    if not (entry["type"] == "mines" and game.persisted):
+        db.add_game(user_id, entry["type"], game.bet, payout, "win")
+        db.update_stats(user_id, "win", game.bet, payout)
     progress = award_progress(user_id, GAME_XP_PLAY + GAME_XP_WIN)
     return game, payout, progress
 
@@ -149,11 +162,16 @@ def lose_game(user_id: int):
     # The registry entry, not that flag, determines whether settlement is pending.
     if game.cashed_out:
         return None
+    if entry["type"] == "mines" and game.persisted:
+        if not db.settle_mines_round(game, "lose"):
+            registry.release(user_id)
+            return None
     game.lost = True
     _process_referral_bet(user_id, game.bet)
     registry.release(user_id)
-    db.add_game(user_id, entry["type"], game.bet, 0, "lose")
-    db.update_stats(user_id, "lose", game.bet, 0)
+    if not (entry["type"] == "mines" and game.persisted):
+        db.add_game(user_id, entry["type"], game.bet, 0, "lose")
+        db.update_stats(user_id, "lose", game.bet, 0)
     progress = award_progress(user_id, GAME_XP_PLAY)
     return game, progress
 
@@ -167,9 +185,14 @@ def cancel_game(user_id: int):
     if not getattr(game, "can_refund", True):
         lose_game(user_id)
         return None
+    if entry["type"] == "mines" and game.persisted:
+        if not db.settle_mines_round(game, "cancel"):
+            registry.release(user_id)
+            return None
+    else:
+        db.add_balance(user_id, game.bet, "game_bet", "Возврат ставки")
+        db.add_game(user_id, entry["type"], game.bet, game.bet, "cancel")
     registry.release(user_id)
-    db.add_balance(user_id, game.bet, "game_bet", "Возврат ставки")
-    db.add_game(user_id, entry["type"], game.bet, game.bet, "cancel")
     return game
 
 

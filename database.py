@@ -1,9 +1,14 @@
 import os
+import json
 import sqlite3
 from contextlib import closing, contextmanager
 from datetime import date
 
 from config import ADMIN_IDS, DATABASE_PATH, DATABASE_URL, STARTING_BALANCE
+
+
+class _MinesConflict(Exception):
+    """Rollback a stake when the player already has a stored Mines round."""
 
 if DATABASE_URL:
     import psycopg2
@@ -118,6 +123,17 @@ class Database:
                     win_amount INTEGER NOT NULL DEFAULT 0,
                     result TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS active_mines (
+                    user_id INTEGER PRIMARY KEY,
+                    round_id TEXT NOT NULL UNIQUE,
+                    bet INTEGER NOT NULL,
+                    mine_count INTEGER NOT NULL,
+                    seed TEXT NOT NULL,
+                    house_edge REAL NOT NULL,
+                    revealed TEXT NOT NULL DEFAULT '[]'
                 )
             """)
             conn.execute("""
@@ -315,6 +331,90 @@ class Database:
                 "INSERT INTO transactions (user_id, amount, type, description) VALUES (?, ?, ?, ?)",
                 (user_id, -amount, "game_bet", description),
             )
+            return True
+
+    def start_mines_round(self, game) -> bool:
+        """Store the board and debit its stake in the same transaction."""
+        try:
+            with closing(self._connect()) as conn, conn:
+                updated = conn.execute(
+                    "UPDATE users SET balance = balance - ? WHERE id = ? AND balance >= ?",
+                    (game.bet, game.user_id, game.bet),
+                )
+                if updated.rowcount != 1:
+                    return False
+                inserted = conn.execute(
+                    "INSERT OR IGNORE INTO active_mines "
+                    "(user_id, round_id, bet, mine_count, seed, house_edge, revealed) "
+                    "VALUES (?, ?, ?, ?, ?, ?, '[]')",
+                    (game.user_id, game.public_id, game.bet, game.mines, game.seed, game.house_edge),
+                )
+                if inserted.rowcount != 1:
+                    raise _MinesConflict()
+                conn.execute(
+                    "INSERT INTO transactions (user_id, amount, type, description) "
+                    "VALUES (?, ?, 'game_bet', ?)",
+                    (game.user_id, -game.bet, "Ставка в игре Мины"),
+                )
+                return True
+        except _MinesConflict:
+            return False
+
+    def get_active_mines(self, user_id: int) -> dict | None:
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT * FROM active_mines WHERE user_id = ?", (user_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def save_mines_round(self, game) -> bool:
+        with closing(self._connect()) as conn, conn:
+            updated = conn.execute(
+                "UPDATE active_mines SET revealed = ? WHERE user_id = ? AND round_id = ?",
+                (json.dumps(sorted(game.revealed)), game.user_id, game.public_id),
+            )
+            return updated.rowcount == 1
+
+    def settle_mines_round(self, game, result: str) -> bool:
+        """Finish once; the payout, ledger and statistics commit together."""
+        if result not in ("win", "lose", "cancel"):
+            raise ValueError("invalid Mines result")
+        payout = game.payout if result == "win" else game.bet if result == "cancel" else 0
+        with closing(self._connect()) as conn, conn:
+            deleted = conn.execute(
+                "DELETE FROM active_mines WHERE user_id = ? AND round_id = ?",
+                (game.user_id, game.public_id),
+            )
+            if deleted.rowcount != 1:
+                return False
+            if payout:
+                rubies = round(payout / 50000 * 0.1, 2) if result == "win" and payout >= 50000 else 0
+                conn.execute(
+                    "UPDATE users SET balance = balance + ?, "
+                    "max_balance = MAX(COALESCE(max_balance, 0), balance + ?), "
+                    "rubies = rubies + ? WHERE id = ?",
+                    (payout, payout, rubies, game.user_id),
+                )
+                conn.execute(
+                    "INSERT INTO transactions (user_id, amount, type, description) VALUES (?, ?, ?, ?)",
+                    (game.user_id, payout, "game_win" if result == "win" else "game_bet",
+                     "Выигрыш в игре Мины" if result == "win" else "Возврат ставки"),
+                )
+            conn.execute(
+                "INSERT INTO games (user_id, game_type, bet, win_amount, result) "
+                "VALUES (?, 'mines', ?, ?, ?)",
+                (game.user_id, game.bet, payout, result),
+            )
+            if result != "cancel":
+                self._ensure_stats(conn, game.user_id)
+                conn.execute(
+                    "UPDATE stats SET total_games = total_games + 1, "
+                    "wins = wins + ?, losses = losses + ?, "
+                    "total_bet = total_bet + ?, total_won = total_won + ? "
+                    "WHERE user_id = ?",
+                    (int(result == "win"), int(result == "lose"), game.bet,
+                     payout if result == "win" else 0, game.user_id),
+                )
             return True
 
     def add_rubies(self, user_id: int, amount: float) -> None:
@@ -861,6 +961,17 @@ class PostgresDatabase:
                 )
             """)
             cur.execute("""
+                CREATE TABLE IF NOT EXISTS active_mines (
+                    user_id BIGINT PRIMARY KEY,
+                    round_id TEXT NOT NULL UNIQUE,
+                    bet BIGINT NOT NULL,
+                    mine_count INTEGER NOT NULL,
+                    seed TEXT NOT NULL,
+                    house_edge DOUBLE PRECISION NOT NULL,
+                    revealed TEXT NOT NULL DEFAULT '[]'
+                )
+            """)
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -1066,6 +1177,90 @@ class PostgresDatabase:
                 "INSERT INTO transactions (user_id, amount, type, description) VALUES (%s, %s, %s, %s)",
                 (user_id, -amount, "game_bet", description),
             )
+            return True
+
+    def start_mines_round(self, game) -> bool:
+        """Store the board and debit its stake in the same transaction."""
+        try:
+            with self._cursor() as cur:
+                cur.execute(
+                    "UPDATE users SET balance = balance - %s WHERE id = %s AND balance >= %s",
+                    (game.bet, game.user_id, game.bet),
+                )
+                if cur.rowcount != 1:
+                    return False
+                cur.execute(
+                    "INSERT INTO active_mines "
+                    "(user_id, round_id, bet, mine_count, seed, house_edge, revealed) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, '[]') ON CONFLICT (user_id) DO NOTHING",
+                    (game.user_id, game.public_id, game.bet, game.mines, game.seed, game.house_edge),
+                )
+                if cur.rowcount != 1:
+                    raise _MinesConflict()
+                cur.execute(
+                    "INSERT INTO transactions (user_id, amount, type, description) "
+                    "VALUES (%s, %s, 'game_bet', %s)",
+                    (game.user_id, -game.bet, "Ставка в игре Мины"),
+                )
+                return True
+        except _MinesConflict:
+            return False
+
+    def get_active_mines(self, user_id: int) -> dict | None:
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM active_mines WHERE user_id = %s", (user_id,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def save_mines_round(self, game) -> bool:
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE active_mines SET revealed = %s WHERE user_id = %s AND round_id = %s",
+                (json.dumps(sorted(game.revealed)), game.user_id, game.public_id),
+            )
+            return cur.rowcount == 1
+
+    def settle_mines_round(self, game, result: str) -> bool:
+        """Finish once; the payout, ledger and statistics commit together."""
+        if result not in ("win", "lose", "cancel"):
+            raise ValueError("invalid Mines result")
+        payout = game.payout if result == "win" else game.bet if result == "cancel" else 0
+        with self._cursor() as cur:
+            cur.execute(
+                "DELETE FROM active_mines WHERE user_id = %s AND round_id = %s",
+                (game.user_id, game.public_id),
+            )
+            if cur.rowcount != 1:
+                return False
+            if payout:
+                rubies = round(payout / 50000 * 0.1, 2) if result == "win" and payout >= 50000 else 0
+                cur.execute(
+                    "UPDATE users SET balance = balance + %s, "
+                    "max_balance = GREATEST(COALESCE(max_balance, 0), balance + %s), "
+                    "rubies = rubies + %s WHERE id = %s",
+                    (payout, payout, rubies, game.user_id),
+                )
+                cur.execute(
+                    "INSERT INTO transactions (user_id, amount, type, description) "
+                    "VALUES (%s, %s, %s, %s)",
+                    (game.user_id, payout, "game_win" if result == "win" else "game_bet",
+                     "Выигрыш в игре Мины" if result == "win" else "Возврат ставки"),
+                )
+            cur.execute(
+                "INSERT INTO games (user_id, game_type, bet, win_amount, result) "
+                "VALUES (%s, 'mines', %s, %s, %s)",
+                (game.user_id, game.bet, payout, result),
+            )
+            if result != "cancel":
+                self._ensure_stats(cur, game.user_id)
+                cur.execute(
+                    "UPDATE stats SET total_games = total_games + 1, "
+                    "wins = wins + %s, losses = losses + %s, "
+                    "total_bet = total_bet + %s, total_won = total_won + %s "
+                    "WHERE user_id = %s",
+                    (int(result == "win"), int(result == "lose"), game.bet,
+                     payout if result == "win" else 0, game.user_id),
+                )
             return True
 
     def add_rubies(self, user_id: int, amount: float) -> None:

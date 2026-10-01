@@ -339,6 +339,26 @@ class GameBalanceTests(unittest.TestCase):
             self.assertIs(registry.game(991234), game)
             self.assertEqual(game.safe_revealed, 0)
 
+    def test_bot_mines_menu_restores_stored_round(self):
+        from handlers.mines import mines_count_menu, place_mines_bet
+
+        user_id = 991234
+        before = db.get_user(user_id)["balance"]
+        game = place_mines_bet(user_id, 100, 3)
+        self.assertIsNotNone(game)
+        registry.release(user_id)  # A restarted process has no in-memory game.
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=user_id),
+            answer=AsyncMock(),
+            message=SimpleNamespace(edit_text=AsyncMock()),
+        )
+        asyncio.run(mines_count_menu(callback))
+        text = callback.message.edit_text.await_args.args[0]
+        self.assertIn("Мины", text)
+        self.assertEqual(registry.game(user_id).public_id, game.public_id)
+        self.assertIsNotNone(cancel_game(user_id))
+        self.assertEqual(db.get_user(user_id)["balance"], before)
+
 
 if __name__ == "__main__":
     unittest.main()

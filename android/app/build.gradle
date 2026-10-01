@@ -3,6 +3,8 @@ plugins {
 }
 
 def serverUrl = (project.findProperty('serverUrl') ?: 'https://tonrgminer2026x.onrender.com').toString()
+def releaseKeystore = System.getenv('ANDROID_RELEASE_KEYSTORE')
+def releasePassword = System.getenv('ANDROID_RELEASE_PASSWORD')
 if (!serverUrl.matches('https://[A-Za-z0-9.-]+(:[0-9]+)?')) {
     throw new GradleException('serverUrl must be an HTTPS origin without a path')
 }
@@ -15,13 +17,29 @@ android {
         applicationId 'com.toncasino.app'
         minSdk 24
         targetSdk 34
-        versionCode 1
-        versionName '0.1.0'
+        versionCode 2
+        versionName '0.2.0'
         buildConfigField 'String', 'SERVER_URL', '"' + serverUrl + '"'
     }
 
     buildFeatures {
         buildConfig true
+    }
+
+    if (releaseKeystore && releasePassword) {
+        signingConfigs {
+            release {
+                storeFile file(releaseKeystore)
+                storePassword releasePassword
+                keyAlias 'toncasino'
+                keyPassword releasePassword
+            }
+        }
+        buildTypes {
+            release {
+                signingConfig signingConfigs.release
+            }
+        }
     }
 
     compileOptions {

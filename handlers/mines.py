@@ -39,13 +39,14 @@ def place_mines_bet(user_id: int, bet: int, count: int) -> MinesGame | None:
     if not registry.register(user_id, "mines", game):
         return None
     try:
-        spent = db.spend_balance(user_id, bet, "Ставка в игре Мины")
+        spent = db.start_mines_round(game)
     except Exception:
         registry.release(user_id)
         raise
     if not spent:
         registry.release(user_id)
         return None
+    game.persisted = True
     return game
 
 
@@ -133,7 +134,12 @@ def lose_text(game) -> str:
 @router.callback_query(F.data == "mines", StateFilter("*"))
 async def mines_count_menu(callback: CallbackQuery):
     await callback.answer()
-    if registry.is_active(callback.from_user.id):
+    active = registry.get(callback.from_user.id)
+    if active and active["type"] == "mines":
+        game = active["game"]
+        await callback.message.edit_text(field_text(game), reply_markup=field_kb(game))
+        return
+    if active:
         await callback.answer("Сначала завершите текущую игру!", show_alert=True)
         return
     await callback.message.edit_text(
@@ -272,6 +278,10 @@ async def mines_reveal(callback: CallbackQuery):
         await callback.message.edit_text(lose_text(game) + level_msg, reply_markup=None)
         return
     game.revealed.add(idx)
+    if not db.save_mines_round(game):
+        registry.release(user_id)
+        await callback.answer("Раунд изменился. Откройте игру снова.", show_alert=True)
+        return
     if game.safe_revealed == game.safe_total or game.multiplier >= MAX_GAME_MULTIPLIER:
         maxed = game.safe_revealed < game.safe_total
         result = cashout_game(user_id)
