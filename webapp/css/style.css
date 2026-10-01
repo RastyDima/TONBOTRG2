@@ -1010,6 +1010,17 @@ body {
 .auth-screen h2 { font-size: 32px; letter-spacing: -.04em; }
 .auth-screen p { font-size: 14px; }
 .auth-screen .btn { max-width: 300px; }
+.android-pair-screen { padding-bottom: 38px; }
+.android-pair-screen > p { width: 100%; max-width: 330px; line-height: 1.5; }
+.android-pair-screen h2 { font-size: clamp(24px, 7vw, 32px); }
+.pair-code-label { margin-top: 22px; color: #9b90ba; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; }
+.pair-code { margin: 10px auto 22px; padding: 12px 18px; width: fit-content; border: 1px solid #7864c9; border-radius: 12px; background: #211938; color: #f7eaff; font-size: 23px; font-weight: 800; letter-spacing: .14em; }
+.pair-open-bot { display: flex; align-items: center; justify-content: center; margin: 0 auto; text-decoration: none; }
+.android-pair-screen .pair-hint { max-width: 300px; margin: 18px auto 0; color: #a9a0bc; font-size: 12px; line-height: 1.5; }
+.pair-hint code { color: #e8d6ff; overflow-wrap: anywhere; }
+.android-pair-screen .pair-waiting { margin-top: 18px; color: #69ddae; font-size: 12px; }
+.android-pair-screen .pair-error { margin: 20px 0; color: #ff7d9b; }
+.android-signout { display: block; margin: 20px auto 4px; padding: 10px 14px; border: 0; background: transparent; color: #9b90ba; font-size: 12px; text-decoration: underline; cursor: pointer; }
 
 .page { animation: page-enter .3s ease both; }
 @keyframes page-enter {

@@ -8,8 +8,9 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlencode
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
@@ -24,6 +25,8 @@ os.environ.setdefault("WEBHOOK_SECRET", "offline-webapp-tests")
 
 from config import BOT_TOKEN  # noqa: E402
 from database import db  # noqa: E402
+from mobile_pairing import claim_pairing  # noqa: E402
+from handlers.start import cmd_start  # noqa: E402
 from utils.game_registry import registry  # noqa: E402
 from webapp_auth import issue_session_token, verify_session_token  # noqa: E402
 from webapp_routes import register_webapp_routes  # noqa: E402
@@ -96,6 +99,47 @@ class WebappMinesTests(unittest.IsolatedAsyncioTestCase):
             "/app/api/profile", headers={"Authorization": "Bearer " + token}
         )
         self.assertEqual(response.status, 200)
+
+    async def test_android_pairing_uses_bot_identity_once(self):
+        response = await self.client.post("/app/api/mobile/pair/start")
+        self.assertEqual(response.status, 200)
+        pairing = await response.json()
+        self.assertNotEqual(pairing["code"], pairing["request_id"])
+        self.assertIn("?start=app_" + pairing["code"], pairing["bot_url"])
+
+        response = await self.post("/app/api/mobile/pair/complete", {
+            "request_id": pairing["request_id"],
+        })
+        self.assertEqual(response.status, 202)
+        self.assertFalse(claim_pairing(pairing["request_id"], self.user_id))
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=self.user_id, username=None, first_name="Test"),
+            text="/start app_" + pairing["code"],
+            answer=AsyncMock(),
+        )
+        await cmd_start(message)
+        message.answer.assert_awaited_once()
+        self.assertIn("Аккаунт подключён", message.answer.await_args.args[0])
+        self.assertFalse(claim_pairing(pairing["code"], self.user_id + 1))
+
+        response = await self.post("/app/api/mobile/pair/complete", {
+            "request_id": pairing["request_id"],
+        })
+        self.assertEqual(response.status, 200)
+        token = (await response.json())["token"]
+        self.assertEqual(verify_session_token(token), self.user_id)
+        with patch("webapp_auth.time.time", return_value=time.time() + 2 * 86400):
+            self.assertEqual(verify_session_token(token), self.user_id)
+        with patch("webapp_auth.time.time", return_value=time.time() + 31 * 86400):
+            self.assertIsNone(verify_session_token(token))
+        response = await self.client.get(
+            "/app/api/profile", headers={"Authorization": "Bearer " + token},
+        )
+        self.assertEqual(response.status, 200)
+        response = await self.post("/app/api/mobile/pair/complete", {
+            "request_id": pairing["request_id"],
+        })
+        self.assertEqual(response.status, 410)
 
     async def test_start_reveal_cashout_and_repeated_cashout(self):
         data = await self.start_round()

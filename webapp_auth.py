@@ -11,15 +11,17 @@ from config import BOT_TOKEN
 
 TELEGRAM_AUTH_TTL = 86400  # 24 hours
 SESSION_TTL = 86400
+MOBILE_SESSION_TTL = 30 * 86400
 
 
 def _session_key() -> bytes:
     return hmac.new(BOT_TOKEN.encode(), b"TonCasinoWebSessionV1", hashlib.sha256).digest()
 
 
-def issue_session_token(user_id: int) -> str:
+def issue_session_token(user_id: int, mobile: bool = False) -> str:
     payload = json.dumps(
-        {"uid": int(user_id), "exp": int(time.time()) + SESSION_TTL},
+        {"uid": int(user_id), "exp": int(time.time()) +
+         (MOBILE_SESSION_TTL if mobile else SESSION_TTL)},
         separators=(",", ":"),
     ).encode()
     encoded = base64.urlsafe_b64encode(payload).decode().rstrip("=")
@@ -42,7 +44,7 @@ def verify_session_token(token: str) -> int | None:
         user_id, expires = payload.get("uid"), payload.get("exp")
         if type(user_id) is not int or user_id <= 0 or type(expires) is not int:
             return None
-        if not int(time.time()) < expires <= int(time.time()) + SESSION_TTL:
+        if not int(time.time()) < expires <= int(time.time()) + MOBILE_SESSION_TTL:
             return None
         return user_id
     except (ValueError, TypeError, KeyError, UnicodeError, binascii.Error):

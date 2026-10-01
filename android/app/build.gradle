@@ -1,0 +1,31 @@
+plugins {
+    id 'com.android.application'
+}
+
+def serverUrl = (project.findProperty('serverUrl') ?: 'https://tonrgminer2026x.onrender.com').toString()
+if (!serverUrl.matches('https://[A-Za-z0-9.-]+(:[0-9]+)?')) {
+    throw new GradleException('serverUrl must be an HTTPS origin without a path')
+}
+
+android {
+    namespace 'com.toncasino.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.toncasino.app'
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName '0.1.0'
+        buildConfigField 'String', 'SERVER_URL', '"' + serverUrl + '"'
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

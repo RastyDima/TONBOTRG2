@@ -4,10 +4,11 @@ from pathlib import Path
 
 from aiohttp import web
 
-from config import MAX_BET, MAX_GAME_MULTIPLIER, MIN_BET
+from config import BOT_USERNAME, MAX_BET, MAX_GAME_MULTIPLIER, MIN_BET
 from database import db
 from games.mines import FIELD_SIZE, MAX_MINES, MIN_MINES, MinesGame
 from handlers.shop import SHOP_ITEMS, FRAME_BY_ID, TITLE_BY_ID, ALL_BY_ID
+from mobile_pairing import consume_pairing, create_pairing
 from utils.achievements import ACHIEVEMENTS
 from utils.game_registry import cancel_game, cashout_game, lose_game, registry
 from webapp_auth import issue_session_token, validate_telegram_init_data, verify_session_token
@@ -114,6 +115,44 @@ def register_webapp_routes(app: web.Application) -> None:
 
         token = issue_session_token(user_id)
         return _json_response({"token": token, "user_id": user_id})
+
+    # --- Android: pair a device by confirming a one-time code in the bot ---
+
+    async def api_mobile_pair_start(request):
+        pairing = create_pairing()
+        if pairing is None:
+            return _json_response({"error": "pairing unavailable"}, 429)
+        response = _json_response({
+            "request_id": pairing["request_id"],
+            "code": pairing["code"],
+            "expires_at": pairing["expires_at"],
+            "bot_url": f"https://t.me/{BOT_USERNAME}?start=app_{pairing['code']}",
+        })
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    async def api_mobile_pair_complete(request):
+        try:
+            body = await request.json()
+        except Exception:
+            return _json_response({"error": "bad request"}, 400)
+        if not isinstance(body, dict):
+            return _json_response({"error": "bad request"}, 400)
+        status, user_id = consume_pairing(body.get("request_id"))
+        if status == "expired":
+            return _json_response({"error": "pairing expired"}, 410)
+        if status == "pending":
+            return _json_response({"status": "pending"}, 202)
+        user = db.get_user(user_id)
+        if not user or user.get("is_blocked"):
+            return _json_response({"error": "account unavailable"}, 403)
+        response = _json_response({
+            "status": "complete",
+            "token": issue_session_token(user_id, mobile=True),
+            "user_id": user_id,
+        })
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     # --- Real Mines: the server owns the board, bet and settlement ---
 
@@ -454,6 +493,8 @@ def register_webapp_routes(app: web.Application) -> None:
 
     # Register API routes
     app.router.add_post(f"{WEBAPP_API_PREFIX}/api/auth", api_auth)
+    app.router.add_post(f"{WEBAPP_API_PREFIX}/api/mobile/pair/start", api_mobile_pair_start)
+    app.router.add_post(f"{WEBAPP_API_PREFIX}/api/mobile/pair/complete", api_mobile_pair_complete)
     app.router.add_get(f"{WEBAPP_API_PREFIX}/api/mines", api_mines_state)
     app.router.add_post(f"{WEBAPP_API_PREFIX}/api/mines/start", api_mines_start)
     app.router.add_post(f"{WEBAPP_API_PREFIX}/api/mines/reveal", api_mines_reveal)

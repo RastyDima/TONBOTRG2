@@ -52,3 +52,5 @@ WEEKLY_BONUS = 5000
 MIN_BET = 1
 MAX_BET = 250_000
 MAX_GAME_MULTIPLIER = 8.0
+
+BOT_USERNAME = os.getenv("BOT_USERNAME", "tonbotgram_bot").lstrip("@")

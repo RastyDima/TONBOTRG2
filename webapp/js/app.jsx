@@ -1,6 +1,7 @@
 const { useState, useEffect, useCallback, createContext, useContext } = React;
 
 const API_BASE = '/app/api';
+const IS_ANDROID_SHELL = new URLSearchParams(window.location.search).get('client') === 'android';
 
 const TITLE_COLORS = {
     title_spark: { color: '#ffb86c', bg: 'rgba(255,184,108,0.15)' },
@@ -335,6 +336,10 @@ function ProfilePage({ profile, refreshProfile }) {
                     </div>
                 )}
             </div>
+            {IS_ANDROID_SHELL && <button className="android-signout" onClick={() => {
+                localStorage.removeItem('webapp_token');
+                window.dispatchEvent(new Event('webapp-auth-expired'));
+            }}>Сменить Telegram-аккаунт</button>}
         </div>
     );
 }
@@ -451,7 +456,7 @@ function GamesPage({ profile, refreshProfile }) {
         }
         const prompt = 'После открытия клетки ставка сгорит. Сдаться?';
         const tg = window.Telegram?.WebApp;
-        if (tg?.showConfirm) tg.showConfirm(prompt, confirmed => confirmed && act('cancel'));
+        if (tg?.initData && tg?.showConfirm) tg.showConfirm(prompt, confirmed => confirmed && act('cancel'));
         else if (window.confirm(prompt)) act('cancel');
     };
 
@@ -951,6 +956,78 @@ function AuthScreen({ onAuth }) {
     );
 }
 
+function AndroidPairScreen({ onAuth }) {
+    const [pair, setPair] = useState(null);
+    const [error, setError] = useState('');
+    const [attempt, setAttempt] = useState(0);
+
+    useEffect(() => {
+        let active = true;
+        setPair(null);
+        setError('');
+        api('/mobile/pair/start', { method: 'POST' }).then(data => {
+            if (active) setPair(data);
+        }).catch(() => {
+            if (active) setError('Не удалось получить код. Проверьте подключение к интернету.');
+        });
+        return () => { active = false; };
+    }, [attempt]);
+
+    useEffect(() => {
+        if (!pair?.request_id) return;
+        let active = true;
+        let checking = false;
+        const check = async () => {
+            if (checking || !active) return;
+            checking = true;
+            try {
+                const data = await api('/mobile/pair/complete', {
+                    method: 'POST', body: JSON.stringify({ request_id: pair.request_id }),
+                });
+                if (active && data.token) {
+                    active = false;
+                    if (!await onAuth(data.token)) {
+                        setError('Не удалось войти. Запросите новый код.');
+                        setPair(null);
+                    }
+                }
+            } catch (e) {
+                if (active) {
+                    setError(e.message === 'pairing expired'
+                        ? 'Код истёк. Запросите новый.' : 'Не удалось подтвердить вход. Попробуйте снова.');
+                    setPair(null);
+                }
+            } finally {
+                checking = false;
+            }
+        };
+        check();
+        const timer = setInterval(check, 2500);
+        return () => { active = false; clearInterval(timer); };
+    }, [pair?.request_id]);
+
+    return (
+        <div className="auth-screen android-pair-screen">
+            <div className="auth-orbit" aria-hidden="true"><span>✦</span></div>
+            <div className="auth-kicker">ОДИН АККАУНТ · БОТ И ПРИЛОЖЕНИЕ</div>
+            <h2>Подключите Telegram</h2>
+            <p>Подтвердите вход в боте. Баланс и достижения появятся здесь автоматически.</p>
+            {pair ? <>
+                <div className="pair-code-label">Ваш одноразовый код</div>
+                <div className="pair-code">{pair.code}</div>
+                <a className="btn btn-primary pair-open-bot" href={pair.bot_url}>Открыть бота и подтвердить</a>
+                <p className="pair-hint">Если ссылка не сработала, отправьте боту <code>/connect {pair.code}</code></p>
+                <p className="pair-waiting">Ожидаем подтверждения…</p>
+            </> : <>
+                {error ? <p className="pair-error">{error}</p> : <p>Создаём код входа…</p>}
+                {error && <button className="btn btn-primary" onClick={() => setAttempt(value => value + 1)}>
+                    Получить новый код
+                </button>}
+            </>}
+        </div>
+    );
+}
+
 function App() {
     const [user, setUser] = useState(null);
     const [profile, setProfile] = useState(null);
@@ -1014,8 +1091,23 @@ function App() {
         }
     };
 
+    const handlePairedToken = async token => {
+        try {
+            localStorage.setItem('webapp_token', token);
+            const loadedProfile = await api('/profile');
+            setProfile(loadedProfile);
+            setUser({ user_id: loadedProfile.user_id });
+            return true;
+        } catch {
+            localStorage.removeItem('webapp_token');
+            return false;
+        }
+    };
+
     if (loading) return <Loading />;
-    if (!user) return <AuthScreen onAuth={handleAuth} />;
+    if (!user) return IS_ANDROID_SHELL
+        ? <AndroidPairScreen onAuth={handlePairedToken} />
+        : <AuthScreen onAuth={handleAuth} />;
 
     return (
         <div className="app">

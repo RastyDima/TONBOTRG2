@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery, Message
 from config import ADMIN_IDS, STARTING_BALANCE
 from database import db, level_info, level_name
 from keyboards.main_menu import main_menu
+from mobile_pairing import claim_pairing
 from utils.game_registry import cancel_game, clear_pending_bet, registry
 from utils.helpers import format_number, menu_text
 
@@ -19,7 +20,7 @@ async def cmd_start(message: Message):
     user = message.from_user
     existing = db.get_user(user.id)
     referrer_id = None
-    args = message.text.split()
+    args = (message.text or "").split()
     if len(args) > 1 and args[1].startswith("ref"):
         try:
             referrer_id = int(args[1][3:])
@@ -55,7 +56,32 @@ async def cmd_start(message: Message):
             f"Выберите действие в меню:"
         )
     is_admin = user.id in ADMIN_IDS or bool(db.get_user(user.id)["is_admin"])
+    if len(args) > 1 and args[1].startswith("app_"):
+        paired = claim_pairing(args[1][4:], user.id)
+        await message.answer(
+            "✅ Аккаунт подключён. Вернитесь в Android-приложение."
+            if paired else "⌛ Код приложения устарел. Получите новый код в приложении.",
+            reply_markup=main_menu(is_admin),
+        )
+        return
     await message.answer(text, reply_markup=main_menu(is_admin))
+
+
+@router.message(Command("connect"))
+async def connect_android(message: Message):
+    if message.chat.type != "private":
+        await message.answer("Подключайте приложение в личном чате с ботом.")
+        return
+    user = db.get_user(message.from_user.id)
+    if not user:
+        await message.answer("Сначала используйте /start.")
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    code = parts[1].strip() if len(parts) > 1 else ""
+    if not claim_pairing(code, user["id"]):
+        await message.answer("⌛ Код приложения неверный или устарел. Получите новый код в приложении.")
+        return
+    await message.answer("✅ Аккаунт подключён. Вернитесь в Android-приложение.")
 
 
 @router.message(Command("help"))
