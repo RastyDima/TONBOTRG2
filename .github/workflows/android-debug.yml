@@ -11,6 +11,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -22,6 +24,15 @@ jobs:
         working-directory: android
       - run: ./gradlew --no-daemon assembleDebug
         working-directory: android
+      - name: Publish tested APK
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk android/ton-casino-test-0.1.apk
+          git add android/ton-casino-test-0.1.apk
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Publish Gradle-built Android test APK [skip ci]"
+          git push origin HEAD:main
       - uses: actions/upload-artifact@v4
         with:
           name: ton-casino-android-test
