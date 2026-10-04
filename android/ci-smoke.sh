@@ -13,6 +13,9 @@ sleep 5
 adb shell pidof com.toncasino.app
 
 adb shell cmd connectivity airplane-mode enable
+adb shell svc wifi disable
+adb shell svc data disable
+echo "Airplane mode: $(adb shell settings get global airplane_mode_on)"
 offline_seen=0
 for attempt in $(seq 1 15); do
   adb shell uiautomator dump /sdcard/window.xml >/dev/null 2>&1 || true
@@ -22,9 +25,16 @@ for attempt in $(seq 1 15); do
   fi
   sleep 2
 done
+echo "Offline screen observed: $offline_seen"
+if [ "$offline_seen" -ne 1 ]; then
+  adb shell dumpsys connectivity | grep -E 'VALIDATED|DefaultNetwork' | head -n 12 || true
+  adb shell cat /sdcard/window.xml 2>/dev/null | grep -oE 'text="(Нет интернета|Сервер недоступен|Повторить)"' || true
+fi
 test "$offline_seen" -eq 1
 
 adb shell cmd connectivity airplane-mode disable
+adb shell svc wifi enable
+adb shell svc data enable
 recovered=0
 for attempt in $(seq 1 20); do
   adb shell uiautomator dump /sdcard/window.xml >/dev/null 2>&1 || true
@@ -34,4 +44,5 @@ for attempt in $(seq 1 20); do
   fi
   sleep 2
 done
+echo "Recovery observed: $recovered"
 test "$recovered" -eq 1
