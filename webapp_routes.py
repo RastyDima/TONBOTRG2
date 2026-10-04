@@ -1,5 +1,7 @@
 """WebApp API routes for Telegram Mini App."""
 import logging
+import re
+import time
 from pathlib import Path
 
 from aiohttp import web
@@ -11,7 +13,8 @@ from handlers.shop import SHOP_ITEMS, FRAME_BY_ID, TITLE_BY_ID, ALL_BY_ID
 from mobile_pairing import consume_pairing, create_pairing
 from utils.achievements import ACHIEVEMENTS
 from utils.game_registry import cancel_game, cashout_game, lose_game, registry
-from webapp_auth import issue_session_token, validate_telegram_init_data, verify_session_token
+from webapp_auth import (MOBILE_SESSION_TTL, issue_session_token,
+                         validate_telegram_init_data, verify_session)
 
 logger = logging.getLogger(__name__)
 
@@ -23,16 +26,29 @@ def _json_response(data, status=200):
     return web.json_response(data, status=status)
 
 
-async def _auth_user(request):
-    """Extract and validate user from Bearer token. Returns user dict or None."""
+async def _auth_principal(request):
+    """Return an authenticated user and token metadata, or None."""
     token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-    user_id = verify_session_token(token)
-    if user_id is None:
+    session = verify_session(token)
+    if session is None:
         return None
-    user = db.get_user(user_id)
+    user = db.get_user(session["user_id"])
     if not user or user.get("is_blocked"):
         return None
-    return user
+    return user, session
+
+
+async def _auth_user(request):
+    principal = await _auth_principal(request)
+    return principal[0] if principal else None
+
+
+def _device_label(user_agent: str) -> str:
+    match = re.search(r"TonCasinoAndroid/[0-9.]+ \(([^)]{1,80})\)", user_agent)
+    if not match:
+        return "Android-устройство"
+    label = re.sub(r"[\x00-\x1f<>]", "", match.group(1)).strip()[:80]
+    return label or "Android-устройство"
 
 
 def _mines_snapshot(game: MinesGame, status: str | None = None) -> dict:
@@ -119,13 +135,14 @@ def register_webapp_routes(app: web.Application) -> None:
     # --- Android: pair a device by confirming a one-time code in the bot ---
 
     async def api_mobile_pair_start(request):
-        pairing = create_pairing()
+        pairing = create_pairing(_device_label(request.headers.get("User-Agent", "")))
         if pairing is None:
             return _json_response({"error": "pairing unavailable"}, 429)
         response = _json_response({
             "request_id": pairing["request_id"],
             "code": pairing["code"],
             "expires_at": pairing["expires_at"],
+            "server_time": int(time.time()),
             "bot_url": f"https://t.me/{BOT_USERNAME}?start=app_{pairing['code']}",
         })
         response.headers["Cache-Control"] = "no-store"
@@ -138,7 +155,7 @@ def register_webapp_routes(app: web.Application) -> None:
             return _json_response({"error": "bad request"}, 400)
         if not isinstance(body, dict):
             return _json_response({"error": "bad request"}, 400)
-        status, user_id = consume_pairing(body.get("request_id"))
+        status, user_id, device_label = consume_pairing(body.get("request_id"))
         if status == "expired":
             return _json_response({"error": "pairing expired"}, 410)
         if status == "pending":
@@ -146,13 +163,53 @@ def register_webapp_routes(app: web.Application) -> None:
         user = db.get_user(user_id)
         if not user or user.get("is_blocked"):
             return _json_response({"error": "account unavailable"}, 403)
+        expires_at = int(time.time()) + MOBILE_SESSION_TTL
+        session_id = db.create_mobile_session(user_id, device_label, expires_at)
         response = _json_response({
             "status": "complete",
-            "token": issue_session_token(user_id, mobile=True),
+            "token": issue_session_token(user_id, mobile=True,
+                                         session_id=session_id, expires_at=expires_at),
             "user_id": user_id,
         })
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    async def api_mobile_sessions(request):
+        principal = await _auth_principal(request)
+        if not principal:
+            return _json_response({"error": "unauthorized"}, 401)
+        user, current = principal
+        sessions = db.list_mobile_sessions(user["id"])
+        response = _json_response({"sessions": [
+            {**session, "is_current": session["id"] == current["session_id"]}
+            for session in sessions
+        ]})
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    async def api_mobile_session_revoke(request):
+        principal = await _auth_principal(request)
+        if not principal:
+            return _json_response({"error": "unauthorized"}, 401)
+        session_id = request.match_info["session_id"]
+        if len(session_id) > 128 or not db.revoke_mobile_session(principal[0]["id"], session_id):
+            return _json_response({"error": "device not found"}, 404)
+        return _json_response({"revoked": True})
+
+    async def api_mobile_sessions_revoke_others(request):
+        principal = await _auth_principal(request)
+        if not principal:
+            return _json_response({"error": "unauthorized"}, 401)
+        count = db.revoke_other_mobile_sessions(principal[0]["id"],
+                                                principal[1]["session_id"])
+        return _json_response({"revoked": count})
+
+    async def api_mobile_session_logout(request):
+        principal = await _auth_principal(request)
+        if not principal or principal[1]["session_id"] is None:
+            return _json_response({"error": "unauthorized"}, 401)
+        db.revoke_mobile_session(principal[0]["id"], principal[1]["session_id"])
+        return _json_response({"revoked": True})
 
     # --- Real Mines: the server owns the board, bet and settlement ---
 
@@ -501,6 +558,10 @@ def register_webapp_routes(app: web.Application) -> None:
     app.router.add_post(f"{WEBAPP_API_PREFIX}/api/auth", api_auth)
     app.router.add_post(f"{WEBAPP_API_PREFIX}/api/mobile/pair/start", api_mobile_pair_start)
     app.router.add_post(f"{WEBAPP_API_PREFIX}/api/mobile/pair/complete", api_mobile_pair_complete)
+    app.router.add_get(f"{WEBAPP_API_PREFIX}/api/mobile/sessions", api_mobile_sessions)
+    app.router.add_post(f"{WEBAPP_API_PREFIX}/api/mobile/sessions/revoke-others", api_mobile_sessions_revoke_others)
+    app.router.add_post(f"{WEBAPP_API_PREFIX}/api/mobile/sessions/logout", api_mobile_session_logout)
+    app.router.add_delete(f"{WEBAPP_API_PREFIX}/api/mobile/sessions/{{session_id}}", api_mobile_session_revoke)
     app.router.add_get(f"{WEBAPP_API_PREFIX}/api/mines", api_mines_state)
     app.router.add_post(f"{WEBAPP_API_PREFIX}/api/mines/start", api_mines_start)
     app.router.add_post(f"{WEBAPP_API_PREFIX}/api/mines/reveal", api_mines_reveal)

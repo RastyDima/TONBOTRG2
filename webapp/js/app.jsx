@@ -2,6 +2,7 @@ const { useState, useEffect, useCallback, createContext, useContext } = React;
 
 const API_BASE = '/app/api';
 const IS_ANDROID_SHELL = new URLSearchParams(window.location.search).get('client') === 'android';
+const HAS_NATIVE_UPDATES = IS_ANDROID_SHELL && navigator.userAgent.includes('TonCasinoAndroid/');
 
 const TITLE_COLORS = {
     title_spark: { color: '#ffb86c', bg: 'rgba(255,184,108,0.15)' },
@@ -156,6 +157,107 @@ function FrameAvatar({ frame, photoUrl, initials, small = false, large = false }
             )}
         </div>
     );
+}
+
+function DevicesCard() {
+    const [sessions, setSessions] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState('');
+
+    const loadSessions = useCallback(async () => {
+        try {
+            const data = await api('/mobile/sessions');
+            setSessions(data.sessions || []);
+            setError('');
+        } catch {
+            setError('Не удалось загрузить устройства.');
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    useEffect(() => { loadSessions(); }, [loadSessions]);
+
+    const revoke = async session => {
+        if (busy) return;
+        setBusy(true);
+        try {
+            await api(`/mobile/sessions/${encodeURIComponent(session.id)}`, { method: 'DELETE' });
+            if (session.is_current) {
+                localStorage.removeItem('webapp_token');
+                window.dispatchEvent(new Event('webapp-auth-expired'));
+            } else {
+                await loadSessions();
+            }
+        } catch {
+            setError('Не удалось отключить устройство. Попробуйте ещё раз.');
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const revokeOthers = async () => {
+        if (busy) return;
+        setBusy(true);
+        try {
+            await api('/mobile/sessions/revoke-others', { method: 'POST' });
+            await loadSessions();
+        } catch {
+            setError('Не удалось отключить устройства.');
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const signOut = async () => {
+        if (busy) return;
+        setBusy(true);
+        try {
+            await api('/mobile/sessions/logout', { method: 'POST' });
+            localStorage.removeItem('webapp_token');
+            window.dispatchEvent(new Event('webapp-auth-expired'));
+        } catch {
+            setError('Нет связи с сервером. Не удалось безопасно выйти.');
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const current = sessions.some(session => session.is_current);
+    const otherCount = sessions.filter(session => !session.is_current).length;
+    const formatSeen = seconds => new Date(seconds * 1000).toLocaleString('ru-RU', {
+        day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    });
+
+    return <div className="card devices-card">
+        <div className="card-title">Подключённые устройства <span>ANDROID</span></div>
+        <p className="devices-caption">Здесь можно завершить вход на потерянном или чужом телефоне.</p>
+        {loading ? <p className="devices-muted">Загружаем устройства…</p> : sessions.length === 0
+            ? <p className="devices-muted">Подключённых Android-устройств нет.</p>
+            : <div className="devices-list">{sessions.map(session =>
+                <div className="device-row" key={session.id}>
+                    <span className="device-icon" aria-hidden="true">▣</span>
+                    <div className="device-info">
+                        <strong>{session.device_label}</strong>
+                        <small>Активность: {formatSeen(session.last_seen_at)}</small>
+                        {session.is_current && <small className="device-current">Это устройство</small>}
+                    </div>
+                    <button className="device-revoke" disabled={busy} onClick={() => revoke(session)}
+                        aria-label={`Отключить ${session.device_label}`}>Отключить</button>
+                </div>
+            )}</div>}
+        {otherCount > 0 && <button className="devices-revoke-all" disabled={busy} onClick={revokeOthers}>
+            {current ? 'Отключить все остальные' : 'Отключить все Android-устройства'}
+        </button>}
+        {error && <p className="devices-error">{error}</p>}
+        {IS_ANDROID_SHELL && <>
+            {HAS_NATIVE_UPDATES && <button className="devices-update" onClick={() => { window.location.href = 'toncasino://check-update'; }}>
+                Проверить обновления приложения
+            </button>}
+            <button className="android-signout" disabled={busy} onClick={signOut}>Сменить Telegram-аккаунт</button>
+        </>}
+    </div>;
 }
 
 function ProfilePage({ profile, refreshProfile }) {
@@ -336,10 +438,7 @@ function ProfilePage({ profile, refreshProfile }) {
                     </div>
                 )}
             </div>
-            {IS_ANDROID_SHELL && <button className="android-signout" onClick={() => {
-                localStorage.removeItem('webapp_token');
-                window.dispatchEvent(new Event('webapp-auth-expired'));
-            }}>Сменить Telegram-аккаунт</button>}
+            <DevicesCard />
         </div>
     );
 }
@@ -960,18 +1059,41 @@ function AndroidPairScreen({ onAuth }) {
     const [pair, setPair] = useState(null);
     const [error, setError] = useState('');
     const [attempt, setAttempt] = useState(0);
+    const [remaining, setRemaining] = useState(0);
 
     useEffect(() => {
         let active = true;
         setPair(null);
         setError('');
         api('/mobile/pair/start', { method: 'POST' }).then(data => {
-            if (active) setPair(data);
+            if (active) {
+                const clockOffset = data.server_time * 1000 - Date.now();
+                setRemaining(Math.max(0, Math.ceil((data.expires_at * 1000
+                    - Date.now() - clockOffset) / 1000)));
+                setPair({ ...data, clock_offset: clockOffset });
+            }
         }).catch(() => {
             if (active) setError('Не удалось получить код. Проверьте подключение к интернету.');
         });
         return () => { active = false; };
     }, [attempt]);
+
+    useEffect(() => {
+        if (!pair) return;
+        const tick = () => {
+            const seconds = Math.max(0, Math.ceil((pair.expires_at * 1000
+                - Date.now() - pair.clock_offset) / 1000));
+            setRemaining(seconds);
+            if (seconds === 0) {
+                setPair(null);
+                setError('Код истёк. Запросите новый.');
+            }
+        };
+        tick();
+        const timer = setInterval(tick, 1000);
+        document.addEventListener('visibilitychange', tick);
+        return () => { clearInterval(timer); document.removeEventListener('visibilitychange', tick); };
+    }, [pair?.request_id]);
 
     useEffect(() => {
         if (!pair?.request_id) return;
@@ -1015,6 +1137,7 @@ function AndroidPairScreen({ onAuth }) {
             {pair ? <>
                 <div className="pair-code-label">Ваш одноразовый код</div>
                 <div className="pair-code">{pair.code}</div>
+                <p className="pair-countdown">Код действует ещё {String(Math.floor(remaining / 60)).padStart(2, '0')}:{String(remaining % 60).padStart(2, '0')}</p>
                 <a className="btn btn-primary pair-open-bot" href={pair.bot_url}>Открыть бота и подтвердить</a>
                 <p className="pair-hint">Если ссылка не сработала, отправьте боту <code>/connect {pair.code}</code></p>
                 <p className="pair-waiting">Ожидаем подтверждения…</p>

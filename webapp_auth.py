@@ -8,6 +8,7 @@ import base64
 import binascii
 
 from config import BOT_TOKEN
+from database import db
 
 TELEGRAM_AUTH_TTL = 86400  # 24 hours
 SESSION_TTL = 86400
@@ -15,13 +16,17 @@ MOBILE_SESSION_TTL = 30 * 86400
 
 
 def _session_key() -> bytes:
-    return hmac.new(BOT_TOKEN.encode(), b"TonCasinoWebSessionV1", hashlib.sha256).digest()
+    return hmac.new(BOT_TOKEN.encode(), b"TonCasinoWebSessionV2", hashlib.sha256).digest()
 
 
-def issue_session_token(user_id: int, mobile: bool = False) -> str:
+def issue_session_token(user_id: int, mobile: bool = False,
+                        session_id: str | None = None, expires_at: int | None = None) -> str:
+    if mobile and not session_id:
+        raise ValueError("mobile tokens require a stored session")
     payload = json.dumps(
-        {"uid": int(user_id), "exp": int(time.time()) +
-         (MOBILE_SESSION_TTL if mobile else SESSION_TTL)},
+        {"uid": int(user_id), "exp": expires_at if expires_at is not None else int(time.time()) +
+         (MOBILE_SESSION_TTL if mobile else SESSION_TTL),
+         "kind": "mobile" if mobile else "web", **({"sid": session_id} if mobile else {})},
         separators=(",", ":"),
     ).encode()
     encoded = base64.urlsafe_b64encode(payload).decode().rstrip("=")
@@ -29,7 +34,7 @@ def issue_session_token(user_id: int, mobile: bool = False) -> str:
     return encoded + "." + base64.urlsafe_b64encode(signature).decode().rstrip("=")
 
 
-def verify_session_token(token: str) -> int | None:
+def verify_session(token: str) -> dict | None:
     if not isinstance(token, str) or len(token) > 512:
         return None
     try:
@@ -41,14 +46,34 @@ def verify_session_token(token: str) -> int | None:
         payload = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
         if not isinstance(payload, dict):
             return None
-        user_id, expires = payload.get("uid"), payload.get("exp")
+        user_id, expires, kind = payload.get("uid"), payload.get("exp"), payload.get("kind")
         if type(user_id) is not int or user_id <= 0 or type(expires) is not int:
             return None
-        if not int(time.time()) < expires <= int(time.time()) + MOBILE_SESSION_TTL:
+        if kind not in ("web", "mobile"):
             return None
-        return user_id
+        now = int(time.time())
+        ttl = MOBILE_SESSION_TTL if kind == "mobile" else SESSION_TTL
+        if not now < expires <= now + ttl:
+            return None
+        if kind == "web":
+            return {"user_id": user_id, "session_id": None, "kind": "web"}
+        session_id = payload.get("sid")
+        if not isinstance(session_id, str) or not 16 <= len(session_id) <= 128:
+            return None
+        session = db.get_mobile_session(session_id)
+        if (not session or session["user_id"] != user_id or session["revoked_at"] is not None
+                or session["expires_at"] <= now or session["expires_at"] != expires):
+            return None
+        if session["last_seen_at"] <= now - 300:
+            db.touch_mobile_session(session_id, now)
+        return {"user_id": user_id, "session_id": session_id, "kind": "mobile"}
     except (ValueError, TypeError, KeyError, UnicodeError, binascii.Error):
         return None
+
+
+def verify_session_token(token: str) -> int | None:
+    session = verify_session(token)
+    return session["user_id"] if session else None
 
 
 def validate_telegram_init_data(init_data: str) -> dict | None:

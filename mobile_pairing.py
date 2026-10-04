@@ -19,7 +19,7 @@ def _prune() -> None:
             _codes.pop(request["code"], None)
 
 
-def create_pairing() -> dict | None:
+def create_pairing(device_label: str = "Android-устройство") -> dict | None:
     """Return a private poll ID and a separate code for the bot deep link."""
     _prune()
     if len(_requests) >= MAX_PENDING:
@@ -31,6 +31,7 @@ def create_pairing() -> dict | None:
         "code": code,
         "user_id": None,
         "expires_at": expires_at,
+        "device_label": device_label,
     }
     _codes[code] = request_id
     return {"request_id": request_id, "code": code, "expires_at": expires_at}
@@ -51,16 +52,16 @@ def claim_pairing(code: str, user_id: int) -> bool:
     return True
 
 
-def consume_pairing(request_id: str) -> tuple[str, int | None]:
+def consume_pairing(request_id: str) -> tuple[str, int | None, str | None]:
     """Return pending, claimed or expired; a claimed identity is returned once."""
     if not isinstance(request_id, str) or len(request_id) > 128:
-        return "expired", None
+        return "expired", None, None
     _prune()
     request = _requests.get(request_id)
     if request is None:
-        return "expired", None
+        return "expired", None, None
     if request["user_id"] is None:
-        return "pending", None
+        return "pending", None, None
     _requests.pop(request_id, None)
     _codes.pop(request["code"], None)
-    return "claimed", request["user_id"]
+    return "claimed", request["user_id"], request["device_label"]

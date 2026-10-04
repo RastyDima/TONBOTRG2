@@ -1,6 +1,8 @@
 import os
 import json
 import sqlite3
+import secrets
+import time
 from contextlib import closing, contextmanager
 from datetime import date
 
@@ -242,7 +244,70 @@ class Database:
                     UNIQUE (user_id, position)
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS mobile_sessions (
+                    id TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    device_label TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    last_seen_at INTEGER NOT NULL,
+                    expires_at INTEGER NOT NULL,
+                    revoked_at INTEGER
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS mobile_sessions_user_idx ON mobile_sessions(user_id)")
             conn.commit()
+
+    def create_mobile_session(self, user_id: int, device_label: str, expires_at: int) -> str:
+        session_id = secrets.token_urlsafe(24)
+        now = int(time.time())
+        with closing(self._connect()) as conn, conn:
+            conn.execute("DELETE FROM mobile_sessions WHERE expires_at <= ?", (now,))
+            conn.execute("""
+                INSERT INTO mobile_sessions
+                    (id, user_id, device_label, created_at, last_seen_at, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (session_id, user_id, device_label, now, now, expires_at))
+        return session_id
+
+    def get_mobile_session(self, session_id: str) -> dict | None:
+        with closing(self._connect()) as conn:
+            row = conn.execute("SELECT * FROM mobile_sessions WHERE id = ?", (session_id,)).fetchone()
+            return dict(row) if row else None
+
+    def touch_mobile_session(self, session_id: str, now: int) -> None:
+        with closing(self._connect()) as conn, conn:
+            conn.execute("""
+                UPDATE mobile_sessions SET last_seen_at = ?
+                WHERE id = ? AND last_seen_at <= ? AND revoked_at IS NULL
+            """, (now, session_id, now - 300))
+
+    def list_mobile_sessions(self, user_id: int) -> list[dict]:
+        with closing(self._connect()) as conn:
+            rows = conn.execute("""
+                SELECT id, device_label, created_at, last_seen_at, expires_at
+                FROM mobile_sessions
+                WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?
+                ORDER BY last_seen_at DESC, created_at DESC
+            """, (user_id, int(time.time()))).fetchall()
+            return [dict(row) for row in rows]
+
+    def revoke_mobile_session(self, user_id: int, session_id: str) -> bool:
+        with closing(self._connect()) as conn, conn:
+            result = conn.execute("""
+                UPDATE mobile_sessions SET revoked_at = ?
+                WHERE user_id = ? AND id = ? AND revoked_at IS NULL
+            """, (int(time.time()), user_id, session_id))
+            return result.rowcount > 0
+
+    def revoke_other_mobile_sessions(self, user_id: int, current_id: str | None) -> int:
+        with closing(self._connect()) as conn, conn:
+            result = conn.execute("""
+                UPDATE mobile_sessions SET revoked_at = ?
+                WHERE user_id = ? AND id <> ? AND revoked_at IS NULL
+                  AND expires_at > ?
+            """, (int(time.time()), user_id, current_id or "", int(time.time())))
+            return result.rowcount
 
     # ---------- Пользователи ----------
 
@@ -1105,6 +1170,70 @@ class PostgresDatabase:
                     UNIQUE (user_id, position)
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS mobile_sessions (
+                    id TEXT PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    device_label TEXT NOT NULL,
+                    created_at BIGINT NOT NULL,
+                    last_seen_at BIGINT NOT NULL,
+                    expires_at BIGINT NOT NULL,
+                    revoked_at BIGINT
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS mobile_sessions_user_idx ON mobile_sessions(user_id)")
+
+    def create_mobile_session(self, user_id: int, device_label: str, expires_at: int) -> str:
+        session_id = secrets.token_urlsafe(24)
+        now = int(time.time())
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM mobile_sessions WHERE expires_at <= %s", (now,))
+            cur.execute("""
+                INSERT INTO mobile_sessions
+                    (id, user_id, device_label, created_at, last_seen_at, expires_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (session_id, user_id, device_label, now, now, expires_at))
+        return session_id
+
+    def get_mobile_session(self, session_id: str) -> dict | None:
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM mobile_sessions WHERE id = %s", (session_id,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def touch_mobile_session(self, session_id: str, now: int) -> None:
+        with self._cursor() as cur:
+            cur.execute("""
+                UPDATE mobile_sessions SET last_seen_at = %s
+                WHERE id = %s AND last_seen_at <= %s AND revoked_at IS NULL
+            """, (now, session_id, now - 300))
+
+    def list_mobile_sessions(self, user_id: int) -> list[dict]:
+        with self._cursor() as cur:
+            cur.execute("""
+                SELECT id, device_label, created_at, last_seen_at, expires_at
+                FROM mobile_sessions
+                WHERE user_id = %s AND revoked_at IS NULL AND expires_at > %s
+                ORDER BY last_seen_at DESC, created_at DESC
+            """, (user_id, int(time.time())))
+            return [dict(row) for row in cur.fetchall()]
+
+    def revoke_mobile_session(self, user_id: int, session_id: str) -> bool:
+        with self._cursor() as cur:
+            cur.execute("""
+                UPDATE mobile_sessions SET revoked_at = %s
+                WHERE user_id = %s AND id = %s AND revoked_at IS NULL
+            """, (int(time.time()), user_id, session_id))
+            return cur.rowcount > 0
+
+    def revoke_other_mobile_sessions(self, user_id: int, current_id: str | None) -> int:
+        with self._cursor() as cur:
+            cur.execute("""
+                UPDATE mobile_sessions SET revoked_at = %s
+                WHERE user_id = %s AND id <> %s AND revoked_at IS NULL
+                  AND expires_at > %s
+            """, (int(time.time()), user_id, current_id or "", int(time.time())))
+            return cur.rowcount
 
     # ---------- Пользователи ----------
 

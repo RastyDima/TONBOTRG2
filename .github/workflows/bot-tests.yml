@@ -37,3 +37,11 @@ jobs:
         run: python -m unittest discover -s tests -v
         env:
           TEST_POSTGRES_URL: postgresql://bot_tests:bot_tests@localhost:5432/bot_tests
+      - name: Run WebApp and device sessions with PostgreSQL
+        run: python -m unittest tests.test_webapp_mines -v
+        env:
+          BOT_TOKEN: offline-webapp-tests
+          RENDER: 'false'
+          DATABASE_URL: postgresql://bot_tests:bot_tests@localhost:5432/bot_tests
+          ADMIN_PANEL_PASSWORD: offline-webapp-tests
+          WEBHOOK_SECRET: offline-webapp-tests

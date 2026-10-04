@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import base64
 import json
 import os
 import tempfile
@@ -141,6 +142,80 @@ class WebappMinesTests(unittest.IsolatedAsyncioTestCase):
             "request_id": pairing["request_id"],
         })
         self.assertEqual(response.status, 410)
+
+    async def pair_android(self, label="Test Phone"):
+        response = await self.client.post("/app/api/mobile/pair/start", headers={
+            "User-Agent": f"WebView TonCasinoAndroid/0.3.0 ({label}; Android 15)"})
+        self.assertEqual(response.status, 200)
+        pairing = await response.json()
+        self.assertGreater(pairing["expires_at"], pairing["server_time"])
+        self.assertTrue(claim_pairing(pairing["code"], self.user_id))
+        response = await self.client.post("/app/api/mobile/pair/complete", json={
+            "request_id": pairing["request_id"]})
+        self.assertEqual(response.status, 200)
+        return (await response.json())["token"]
+
+    async def test_android_sessions_can_be_listed_and_revoked(self):
+        first = await self.pair_android("Phone One")
+        second = await self.pair_android("Phone Two")
+        first_headers = {"Authorization": "Bearer " + first}
+        second_headers = {"Authorization": "Bearer " + second}
+
+        response = await self.client.get("/app/api/mobile/sessions", headers=first_headers)
+        self.assertEqual(response.status, 200)
+        sessions = (await response.json())["sessions"]
+        self.assertEqual(len(sessions), 2)
+        self.assertEqual(sum(item["is_current"] for item in sessions), 1)
+        self.assertTrue(any("Phone One" in item["device_label"] for item in sessions))
+        second_id = next(item["id"] for item in sessions if not item["is_current"])
+
+        response = await self.client.delete("/app/api/mobile/sessions/" + second_id,
+                                            headers=first_headers)
+        self.assertEqual(response.status, 200)
+        response = await self.client.get("/app/api/profile", headers=second_headers)
+        self.assertEqual(response.status, 401)
+        response = await self.client.get("/app/api/profile", headers=first_headers)
+        self.assertEqual(response.status, 200)
+
+        third = await self.pair_android("Phone Three")
+        response = await self.client.post("/app/api/mobile/sessions/revoke-others",
+                                          headers=first_headers)
+        self.assertEqual(response.status, 200)
+        self.assertEqual((await response.json())["revoked"], 1)
+        self.assertEqual((await self.client.get("/app/api/profile", headers={
+            "Authorization": "Bearer " + third})).status, 401)
+        self.assertEqual((await self.client.get("/app/api/profile", headers=first_headers)).status, 200)
+
+        response = await self.client.post("/app/api/mobile/sessions/logout", headers=first_headers)
+        self.assertEqual(response.status, 200)
+        self.assertEqual((await self.client.get("/app/api/profile", headers=first_headers)).status, 401)
+
+    async def test_telegram_can_disconnect_android_but_not_another_users_device(self):
+        mobile = await self.pair_android()
+        response = await self.client.get("/app/api/mobile/sessions", headers=self.headers)
+        self.assertEqual(response.status, 200)
+        sessions = (await response.json())["sessions"]
+        self.assertEqual(len(sessions), 1)
+        self.assertFalse(sessions[0]["is_current"])
+        db.register_user(self.user_id + 999999, None, "Outsider")
+        outsider_headers = {"Authorization": "Bearer " + issue_session_token(self.user_id + 999999)}
+        self.assertEqual((await self.client.delete("/app/api/mobile/sessions/" + sessions[0]["id"],
+                                                    headers=outsider_headers)).status, 404)
+        self.assertEqual((await self.client.get("/app/api/profile", headers={
+            "Authorization": "Bearer " + mobile})).status, 200)
+        response = await self.client.post("/app/api/mobile/sessions/revoke-others", headers=self.headers)
+        self.assertEqual((await response.json())["revoked"], 1)
+        self.assertEqual((await self.client.get("/app/api/profile", headers={
+            "Authorization": "Bearer " + mobile})).status, 401)
+
+    async def test_legacy_tokens_require_new_login(self):
+        payload = base64.urlsafe_b64encode(json.dumps({
+            "uid": self.user_id, "exp": int(time.time()) + 86400,
+        }, separators=(",", ":")).encode()).decode().rstrip("=")
+        old_key = hmac.new(BOT_TOKEN.encode(), b"TonCasinoWebSessionV1", hashlib.sha256).digest()
+        signature = base64.urlsafe_b64encode(hmac.new(
+            old_key, payload.encode(), hashlib.sha256).digest()).decode().rstrip("=")
+        self.assertIsNone(verify_session_token(payload + "." + signature))
 
     async def test_start_reveal_cashout_and_repeated_cashout(self):
         data = await self.start_round()
