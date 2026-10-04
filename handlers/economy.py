@@ -1,10 +1,13 @@
 from aiogram import Router, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from database import db
+from keyboards.economy import bonuses_kb, history_kb, reminders_kb
+from utils.economy_views import HISTORY_LABELS, bonuses_text, history_page, reminders_text
 from utils.game_registry import award_progress, progress_text
 from keyboards.common import back_button
 from utils.helpers import (
@@ -12,7 +15,6 @@ from utils.helpers import (
     format_number,
     get_daily_bonus,
     get_weekly_bonus,
-    history_text,
     quick_command,
 )
 from utils.notify import send as notify_send
@@ -38,92 +40,137 @@ def back_kb():
     return kb.as_markup()
 
 
-@router.message(Command("daily"))
-async def daily_command(message: Message):
-    ok = db.claim_daily(message.from_user.id, get_daily_bonus())
-    if ok:
-        level_msg = progress_text(award_progress(message.from_user.id, XP_DAILY))
-        await message.answer(
-            f"🎁 <b>Ежедневный бонус</b>\n\nВы получили {format_number(get_daily_bonus())} TON!{level_msg}",
-            reply_markup=back_kb(),
-        )
-    else:
-        await message.answer(
-            "⏳ Вы уже получали бонус сегодня. Возвращайтесь завтра!", reply_markup=back_kb()
-        )
-
-
 XP_DAILY = 15
 XP_WEEKLY = 50
 
 
-@router.callback_query(F.data == "daily", StateFilter("*"))
-async def daily_callback(callback: CallbackQuery, state: FSMContext):
+async def _edit_screen(callback: CallbackQuery, text: str, markup) -> None:
+    try:
+        await callback.message.edit_text(text, reply_markup=markup)
+    except TelegramBadRequest as exc:
+        if "message is not modified" not in str(exc).lower():
+            raise
+
+
+def _bonus_screen(user_id: int, kind: str | None = None):
+    user = db.get_user(user_id)
+    if not user:
+        return "Сначала нажмите /start", None
+    notice = ""
+    if kind:
+        amount = get_daily_bonus() if kind == "daily" else get_weekly_bonus()
+        claim = db.claim_daily if kind == "daily" else db.claim_weekly
+        if claim(user_id, amount):
+            xp = XP_DAILY if kind == "daily" else XP_WEEKLY
+            notice = (f"✅ Получено <b>{format_number(amount)} TON</b>."
+                      + progress_text(award_progress(user_id, xp)))
+        else:
+            notice = "⏳ Этот бонус уже получен."
+        user = db.get_user(user_id)
+    return bonuses_text(user, get_daily_bonus(), get_weekly_bonus(), notice), bonuses_kb(user)
+
+
+@router.message(Command("bonuses", "daily", "weekly"))
+async def bonuses_command(message: Message, state: FSMContext):
+    await state.clear()
+    command = (message.text or "").split()[0].split("@")[0].lstrip("/")
+    kind = command if command in ("daily", "weekly") else None
+    text, markup = _bonus_screen(message.from_user.id, kind)
+    await message.answer(text, reply_markup=markup)
+
+
+@router.callback_query(F.data.in_({"bonuses", "daily", "weekly"}), StateFilter("*"))
+async def bonuses_callback(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.answer()
-    ok = db.claim_daily(callback.from_user.id, get_daily_bonus())
-    if ok:
-        level_msg = progress_text(award_progress(callback.from_user.id, XP_DAILY))
-        await callback.message.edit_text(
-            f"🎁 <b>Ежедневный бонус</b>\n\n"
-            f"Вы получили {format_number(get_daily_bonus())} TON!"
-            f"{level_msg}",
-            reply_markup=back_kb(),
-        )
-    else:
-        await callback.message.edit_text(
-            "⏳ Вы уже получали бонус сегодня. Возвращайтесь завтра!", reply_markup=back_kb()
-        )
+    kind = callback.data if callback.data in ("daily", "weekly") else None
+    text, markup = _bonus_screen(callback.from_user.id, kind)
+    await _edit_screen(callback, text, markup)
 
 
-@router.message(Command("weekly"))
-async def weekly_command(message: Message):
-    ok = db.claim_weekly(message.from_user.id, get_weekly_bonus())
-    if ok:
-        level_msg = progress_text(award_progress(message.from_user.id, XP_WEEKLY))
-        await message.answer(
-            f"🗓 <b>Еженедельный бонус</b>\n\nВы получили {format_number(get_weekly_bonus())} TON!{level_msg}",
-            reply_markup=back_kb(),
-        )
-    else:
-        await message.answer(
-            "⏳ Вы уже получали еженедельный бонус. Возвращайтесь на следующей неделе!",
-            reply_markup=back_kb(),
-        )
+@router.message(Command("reminders"))
+async def reminders_command(message: Message, state: FSMContext):
+    await state.clear()
+    user = db.get_user(message.from_user.id)
+    if not user:
+        await message.answer("Сначала нажмите /start")
+        return
+    await message.answer(reminders_text(user), reply_markup=reminders_kb(user))
 
 
-@router.callback_query(F.data == "weekly", StateFilter("*"))
-async def weekly_callback(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "reminders", StateFilter("*"))
+async def reminders_callback(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.answer()
-    ok = db.claim_weekly(callback.from_user.id, get_weekly_bonus())
-    if ok:
-        level_msg = progress_text(award_progress(callback.from_user.id, XP_WEEKLY))
-        await callback.message.edit_text(
-            f"🗓 <b>Еженедельный бонус</b>\n\n"
-            f"Вы получили {format_number(get_weekly_bonus())} TON!"
-            f"{level_msg}",
-            reply_markup=back_kb(),
-        )
-    else:
-        await callback.message.edit_text(
-            "⏳ Вы уже получали еженедельный бонус. Возвращайтесь на следующей неделе!",
-            reply_markup=back_kb(),
-        )
+    user = db.get_user(callback.from_user.id)
+    if not user:
+        await _edit_screen(callback, "Сначала нажмите /start", None)
+        return
+    await _edit_screen(callback, reminders_text(user), reminders_kb(user))
+
+
+@router.callback_query(F.data.startswith("reminder:"), StateFilter("*"))
+async def reminder_toggle(callback: CallbackQuery, state: FSMContext):
+    parts = callback.data.split(":")
+    if len(parts) != 3 or parts[1] not in ("daily", "weekly") or parts[2] not in ("0", "1"):
+        await callback.answer("Неизвестная настройка", show_alert=True)
+        return
+    await state.clear()
+    user = db.get_user(callback.from_user.id)
+    if not user:
+        await callback.answer("Сначала нажмите /start", show_alert=True)
+        return
+    db.set_bonus_reminder(user["id"], parts[1], parts[2] == "1")
+    await callback.answer("Настройки сохранены")
+    user = db.get_user(user["id"])
+    await _edit_screen(callback, reminders_text(user), reminders_kb(user))
 
 
 @router.message(Command("history"))
-async def history_command(message: Message):
-    tx = db.get_transactions(message.from_user.id)
-    await message.answer(history_text(tx), reply_markup=back_kb())
-
-
-@router.callback_query(F.data == "history", StateFilter("*"))
-async def history_callback(callback: CallbackQuery, state: FSMContext):
+async def history_command(message: Message, state: FSMContext):
     await state.clear()
+    if not db.get_user(message.from_user.id):
+        await message.answer("Сначала нажмите /start")
+        return
+    view = history_page(db, message.from_user.id)
+    await message.answer(view["text"], reply_markup=history_kb(
+        view["category"], view["page"], view["pages"], view["anchor"],
+    ))
+
+
+@router.callback_query(
+    (F.data == "history") | F.data.startswith("history:") | F.data.startswith("history_refresh:"),
+    StateFilter("*"),
+)
+async def history_callback(callback: CallbackQuery, state: FSMContext):
+    category, page, anchor = "all", 0, None
+    try:
+        if callback.data.startswith("history_refresh:"):
+            category = callback.data.split(":", 1)[1]
+        elif callback.data.startswith("history:"):
+            _, category, page_text, anchor_text = callback.data.split(":")
+            page, anchor = int(page_text), int(anchor_text)
+            if page < 0 or not 0 <= anchor <= 2 ** 63 - 1:
+                raise ValueError
+        if category not in HISTORY_LABELS:
+            raise ValueError
+    except (ValueError, TypeError):
+        await callback.answer("Откройте историю заново через /history", show_alert=True)
+        return
+    await state.clear()
+    if not db.get_user(callback.from_user.id):
+        await callback.answer("Сначала нажмите /start", show_alert=True)
+        return
     await callback.answer()
-    tx = db.get_transactions(callback.from_user.id)
-    await callback.message.edit_text(history_text(tx), reply_markup=back_kb())
+    view = history_page(db, callback.from_user.id, category, page, anchor)
+    await _edit_screen(callback, view["text"], history_kb(
+        view["category"], view["page"], view["pages"], view["anchor"],
+    ))
+
+
+@router.callback_query(F.data == "history_page", StateFilter("*"))
+async def history_page_info(callback: CallbackQuery):
+    await callback.answer("Листайте историю кнопками «Назад» и «Далее».")
 
 
 @router.message(F.text, is_balance)

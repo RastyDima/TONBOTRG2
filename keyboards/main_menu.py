@@ -9,7 +9,7 @@ def main_menu(is_admin: bool = False):
     ])
     rows.append([
         InlineKeyboardButton(text="💰 Баланс", callback_data="balance"),
-        InlineKeyboardButton(text="🎁 Бонус", callback_data="daily"),
+        InlineKeyboardButton(text="🎁 Бонусы", callback_data="bonuses"),
     ])
     rows.append([
         InlineKeyboardButton(text="👥 Рефералы", callback_data="ref"),

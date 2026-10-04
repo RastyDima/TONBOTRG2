@@ -85,6 +85,8 @@ TX_LABELS = {
     "transfer_out": "💸 Перевод отправлен",
     "transfer_in": "💸 Перевод получен",
     "promo": "🎟 Промокод",
+    "shop": "🛒 Покупка в магазине",
+    "referral": "👥 Реферальный бонус",
 }
 
 
@@ -143,14 +145,23 @@ def profile_text(user: dict, stats: dict) -> str:
     return text
 
 
-def history_text(transactions: list) -> str:
+def history_text(transactions: list, *, category: str = "Все", page: int = 0,
+                 pages: int = 1, total: int | None = None) -> str:
+    lines = ["📜 <b>История транзакций</b>",
+             f"Фильтр: {html.escape(category)} · Страница {page + 1}/{pages}"]
+    if total is not None:
+        lines.append(f"Операций: {total}")
     if not transactions:
-        return "📜 <b>История транзакций</b>\n\nПока нет записей."
-    lines = ["📜 <b>История транзакций</b>\n"]
+        lines.append("\nПока нет операций по этому фильтру.")
     for t in transactions:
         sign = "+" if t["amount"] > 0 else ""
-        lines.append(f"{sign}{format_number(t['amount'])} · {TX_LABELS.get(t['type'], t['type'])}")
-        lines.append(f"     <i>{t['created_at']}</i>")
+        label = TX_LABELS.get(t["type"], t["type"])
+        if t["type"] == "game_bet" and t["amount"] > 0:
+            label = "↩️ Возврат ставки"
+        lines.append(f"\n<b>{sign}{format_number(t['amount'])} TON</b> · {html.escape(label)}")
+        if t.get("description"):
+            lines.append(html.escape(str(t["description"])[:80]))
+        lines.append(f"<i>{html.escape(str(t['created_at']))}</i>")
     return "\n".join(lines)
 
 

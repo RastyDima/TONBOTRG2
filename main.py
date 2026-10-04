@@ -14,7 +14,8 @@ from config import BOT_TOKEN, PORT, PUBLIC_BASE_URL, WEBHOOK_PATH, WEBHOOK_SECRE
 from database import db
 from handlers import register_handlers
 from utils import notify
-from utils.helpers import format_number, get_daily_bonus, get_weekly_bonus
+from utils.reminders import send_bonus_reminders
+from utils.helpers import get_daily_bonus, get_weekly_bonus
 from webadmin import register_admin_routes
 from webapp_routes import register_webapp_routes
 
@@ -30,6 +31,8 @@ HEARTBEAT_INTERVAL = 4 * 60  # секунд, меньше порога прос�
 def _bonus_kb(action: str):
     kb = InlineKeyboardBuilder()
     kb.button(text="🎁 Забрать бонус", callback_data=action)
+    kb.button(text="🔔 Настройки напоминаний", callback_data="reminders")
+    kb.adjust(1)
     return kb.as_markup()
 
 
@@ -38,24 +41,9 @@ async def reminder_loop() -> None:
     logging.info("Reminder loop started")
     while True:
         try:
-            daily_amount = get_daily_bonus()
-            for u in db.get_daily_eligible():
-                await notify.send(
-                    u["id"],
-                    f"🎁 <b>Ежедневный бонус доступен!</b>\n\n"
-                    f"Заберите {format_number(daily_amount)} TON, нажав кнопку ниже.",
-                    _bonus_kb("daily"),
-                )
-                db.mark_daily_notified(u["id"])
-            weekly_amount = get_weekly_bonus()
-            for u in db.get_weekly_eligible():
-                await notify.send(
-                    u["id"],
-                    f"🗓 <b>Еженедельный бонус доступен!</b>\n\n"
-                    f"Вы можете получить {format_number(weekly_amount)} TON — нажмите кнопку ниже.",
-                    _bonus_kb("weekly"),
-                )
-                db.mark_weekly_notified(u["id"])
+            await send_bonus_reminders(
+                db, notify.send, get_daily_bonus(), get_weekly_bonus(), _bonus_kb,
+            )
         except Exception:  # noqa: BLE001
             logging.exception("reminder loop error")
         await asyncio.sleep(REMINDER_INTERVAL)
