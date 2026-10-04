@@ -4,38 +4,134 @@ import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.TextView;
 
 public final class MainActivity extends Activity {
     private WebView webView;
+    private ProgressBar loading;
+    private LinearLayout errorPanel;
+    private TextView errorTitle;
+    private TextView errorMessage;
+    private ConnectivityManager connectivity;
+    private ConnectivityManager.NetworkCallback networkCallback;
+    private UpdateManager updateManager;
+    private boolean pageFailed;
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private boolean hasInternet() {
+        Network network = connectivity.getActiveNetwork();
+        NetworkCapabilities capabilities = connectivity.getNetworkCapabilities(network);
+        return capabilities != null && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+    }
+
+    private void showFailure(boolean offline) {
+        pageFailed = true;
+        loading.setVisibility(View.GONE);
+        webView.setVisibility(View.INVISIBLE);
+        errorTitle.setText(offline ? "Нет интернета" : "Сервер недоступен");
+        errorMessage.setText(offline
+                ? "Проверьте подключение. Когда сеть вернётся, мы попробуем снова."
+                : "Не удалось открыть игру. Повторите загрузку чуть позже.");
+        errorPanel.setVisibility(View.VISIBLE);
+    }
+
+    private void retryPage() {
+        if (!hasInternet()) {
+            showFailure(true);
+            return;
+        }
+        pageFailed = false;
+        errorPanel.setVisibility(View.GONE);
+        webView.setVisibility(View.VISIBLE);
+        loading.setVisibility(View.VISIBLE);
+        if (webView.getUrl() == null) webView.loadUrl(BuildConfig.SERVER_URL + "/app/?client=android");
+        else webView.reload();
+        updateManager.checkForUpdates(false);
+    }
+
+    private void onNetworkChanged() {
+        if (!hasInternet()) showFailure(true);
+        else if (pageFailed && "Нет интернета".contentEquals(errorTitle.getText())) retryPage();
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
+        connectivity = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.rgb(18, 13, 33));
         webView = new WebView(this);
         webView.setBackgroundColor(Color.rgb(18, 13, 33));
-        root.addView(webView, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT));
-
-        ProgressBar loading = new ProgressBar(this);
-        FrameLayout.LayoutParams progressLayout = new FrameLayout.LayoutParams(90, 90);
-        progressLayout.gravity = Gravity.CENTER;
+        root.addView(webView, new FrameLayout.LayoutParams(-1, -1));
+        loading = new ProgressBar(this);
+        FrameLayout.LayoutParams progressLayout = new FrameLayout.LayoutParams(dp(54), dp(54), Gravity.CENTER);
         root.addView(loading, progressLayout);
+
+        errorPanel = new LinearLayout(this);
+        errorPanel.setOrientation(LinearLayout.VERTICAL);
+        errorPanel.setGravity(Gravity.CENTER);
+        errorPanel.setPadding(dp(26), dp(30), dp(26), dp(30));
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(Color.rgb(30, 37, 57));
+        background.setCornerRadius(dp(22));
+        background.setStroke(dp(1), Color.rgb(65, 111, 112));
+        errorPanel.setBackground(background);
+        FrameLayout.LayoutParams panelLayout = new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER);
+        panelLayout.setMargins(dp(24), 0, dp(24), 0);
+        root.addView(errorPanel, panelLayout);
+        TextView symbol = new TextView(this);
+        symbol.setText("✦");
+        symbol.setTextColor(Color.rgb(116, 227, 193));
+        symbol.setTextSize(38);
+        errorPanel.addView(symbol);
+        errorTitle = new TextView(this);
+        errorTitle.setTextColor(Color.WHITE);
+        errorTitle.setTextSize(23);
+        errorTitle.setTypeface(null, Typeface.BOLD);
+        errorTitle.setGravity(Gravity.CENTER);
+        errorPanel.addView(errorTitle);
+        errorMessage = new TextView(this);
+        errorMessage.setTextColor(Color.rgb(169, 188, 196));
+        errorMessage.setTextSize(14);
+        errorMessage.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams messageLayout = new LinearLayout.LayoutParams(-1, -2);
+        messageLayout.topMargin = dp(10);
+        errorPanel.addView(errorMessage, messageLayout);
+        Button retry = new Button(this);
+        retry.setText("Повторить");
+        retry.setTextColor(Color.WHITE);
+        retry.setAllCaps(false);
+        retry.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.rgb(36, 115, 109)));
+        LinearLayout.LayoutParams retryLayout = new LinearLayout.LayoutParams(-1, dp(50));
+        retryLayout.topMargin = dp(22);
+        errorPanel.addView(retry, retryLayout);
+        retry.setOnClickListener(view -> retryPage());
+        errorPanel.setVisibility(View.GONE);
         setContentView(root);
 
         WebSettings settings = webView.getSettings();
@@ -44,41 +140,72 @@ public final class MainActivity extends Activity {
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
         settings.setMediaPlaybackRequiresUserGesture(true);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            settings.setSafeBrowsingEnabled(true);
-        }
+        String model = (Build.MANUFACTURER + " " + Build.MODEL).replaceAll("[^\\p{L}\\p{N} ._-]", " ")
+                .replaceAll("\\s+", " ").trim();
+        if (model.length() > 56) model = model.substring(0, 56);
+        settings.setUserAgentString(settings.getUserAgentString() + " TonCasinoAndroid/"
+                + BuildConfig.VERSION_NAME + " (" + model + "; Android " + Build.VERSION.RELEASE + ")");
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) settings.setSafeBrowsingEnabled(true);
 
+        updateManager = new UpdateManager(this);
         Uri server = Uri.parse(BuildConfig.SERVER_URL);
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 if (!request.isForMainFrame()) return false;
                 Uri target = request.getUrl();
+                if ("toncasino".equals(target.getScheme()) && "check-update".equals(target.getHost())) {
+                    updateManager.checkForUpdates(true);
+                    return true;
+                }
                 if ("https".equals(target.getScheme())
                         && server.getHost().equalsIgnoreCase(target.getHost())
                         && server.getPort() == target.getPort()) return false;
                 try {
                     startActivity(new Intent(Intent.ACTION_VIEW, target));
                 } catch (ActivityNotFoundException ignored) {
-                    // The page stays open if no app can handle an external URL.
+                    // No app can handle the external link.
                 }
                 return true;
             }
 
             @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                if (!pageFailed) loading.setVisibility(View.VISIBLE);
+            }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (request.isForMainFrame()) showFailure(!hasInternet());
+            }
+
+            @Override
+            public void onReceivedHttpError(WebView view, WebResourceRequest request,
+                                            WebResourceResponse response) {
+                if (request.isForMainFrame() && response.getStatusCode() >= 400)
+                    showFailure(!hasInternet());
+            }
+
+            @Override
             public void onPageFinished(WebView view, String url) {
                 loading.setVisibility(View.GONE);
+                if (!pageFailed) errorPanel.setVisibility(View.GONE);
             }
         });
         webView.setWebChromeClient(new WebChromeClient());
-        if (savedInstanceState != null) {
-            webView.restoreState(savedInstanceState);
-        } else {
-            webView.loadUrl(BuildConfig.SERVER_URL + "/app/?client=android");
-        }
+        if (savedInstanceState != null) webView.restoreState(savedInstanceState);
+        else if (hasInternet()) webView.loadUrl(BuildConfig.SERVER_URL + "/app/?client=android");
+        else showFailure(true);
+
+        networkCallback = new ConnectivityManager.NetworkCallback() {
+            @Override public void onAvailable(Network network) { runOnUiThread(() -> onNetworkChanged()); }
+            @Override public void onLost(Network network) { runOnUiThread(() -> onNetworkChanged()); }
+            @Override public void onCapabilitiesChanged(Network network, NetworkCapabilities capabilities) {
+                runOnUiThread(() -> onNetworkChanged());
+            }
+        };
+        connectivity.registerDefaultNetworkCallback(networkCallback);
     }
 
     @Override
@@ -97,16 +224,21 @@ public final class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         if (webView != null) webView.onResume();
+        if (updateManager != null) updateManager.onResume();
+        if (errorPanel != null && pageFailed) onNetworkChanged();
     }
 
     @Override
     protected void onPause() {
+        if (updateManager != null) updateManager.onPause();
         if (webView != null) webView.onPause();
         super.onPause();
     }
 
     @Override
     protected void onDestroy() {
+        if (networkCallback != null) connectivity.unregisterNetworkCallback(networkCallback);
+        if (updateManager != null) updateManager.close();
         if (webView != null) {
             webView.destroy();
             webView = null;
