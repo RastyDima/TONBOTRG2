@@ -7,6 +7,33 @@ from datetime import date
 from config import ADMIN_IDS, DATABASE_PATH, DATABASE_URL, STARTING_BALANCE
 
 
+TRANSACTION_FILTERS = {
+    "all": (),
+    "games": ("game_bet", "game_win"),
+    "bonuses": ("bonus", "daily", "weekly", "promo"),
+    "transfers": ("transfer_in", "transfer_out"),
+    "shop": ("shop",),
+    "referrals": ("referral",),
+}
+
+
+def _transaction_where(user_id, category, before_id, placeholder):
+    if category not in TRANSACTION_FILTERS:
+        raise ValueError("Unknown transaction filter")
+    clauses = [f"user_id = {placeholder}"]
+    params = [user_id]
+    types = TRANSACTION_FILTERS[category]
+    if types:
+        clauses.append(f"type IN ({', '.join([placeholder] * len(types))})")
+        params.extend(types)
+    if before_id is not None:
+        if before_id < 0:
+            raise ValueError("Invalid history snapshot")
+        clauses.append(f"id <= {placeholder}")
+        params.append(before_id)
+    return " AND ".join(clauses), tuple(params)
+
+
 class _MinesConflict(Exception):
     """Rollback a stake when the player already has a stored Mines round."""
 
@@ -169,6 +196,10 @@ class Database:
                 conn.execute("ALTER TABLE users ADD COLUMN last_weekly TEXT")
             if "weekly_notified" not in cols:
                 conn.execute("ALTER TABLE users ADD COLUMN weekly_notified INTEGER NOT NULL DEFAULT 0")
+            for kind in ("daily", "weekly"):
+                if f"{kind}_reminder_enabled" not in cols:
+                    conn.execute(f"ALTER TABLE users ADD COLUMN {kind}_reminder_enabled INTEGER NOT NULL DEFAULT 1")
+            conn.execute("CREATE INDEX IF NOT EXISTS transactions_user_id_idx ON transactions (user_id, id)")
             if "max_balance" not in cols:
                 conn.execute("ALTER TABLE users ADD COLUMN max_balance INTEGER NOT NULL DEFAULT 0")
                 conn.execute("UPDATE users SET max_balance = balance WHERE max_balance = 0")
@@ -426,13 +457,30 @@ class Database:
 
     # ---------- Транзакции ----------
 
-    def get_transactions(self, user_id: int, limit: int = 10) -> list[dict]:
+    def get_transactions(self, user_id: int, limit: int = 10, *, offset: int = 0,
+                         category: str = "all", before_id: int | None = None) -> list[dict]:
+        if limit < 1 or offset < 0:
+            raise ValueError("Invalid history page")
+        where, params = _transaction_where(user_id, category, before_id, "?")
         with closing(self._connect()) as conn:
             rows = conn.execute(
-                "SELECT * FROM transactions WHERE user_id = ? ORDER BY id DESC LIMIT ?",
-                (user_id, limit),
+                f"SELECT * FROM transactions WHERE {where} ORDER BY id DESC LIMIT ? OFFSET ?",
+                (*params, limit, offset),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def count_transactions(self, user_id: int, *, category: str = "all",
+                           before_id: int | None = None) -> int:
+        where, params = _transaction_where(user_id, category, before_id, "?")
+        with closing(self._connect()) as conn:
+            return conn.execute(f"SELECT COUNT(*) FROM transactions WHERE {where}", params).fetchone()[0]
+
+    def set_bonus_reminder(self, user_id: int, kind: str, enabled: bool) -> None:
+        if kind not in ("daily", "weekly"):
+            raise ValueError("Unknown bonus reminder")
+        with closing(self._connect()) as conn, conn:
+            conn.execute(f"UPDATE users SET {kind}_reminder_enabled = ? WHERE id = ?",
+                         (int(enabled), user_id))
 
     # ---------- Статистика ----------
 
@@ -495,16 +543,14 @@ class Database:
     def claim_daily(self, user_id: int, amount: int) -> bool:
         today = date.today().isoformat()
         with closing(self._connect()) as conn, conn:
-            row = conn.execute(
-                "SELECT last_daily FROM users WHERE id = ?", (user_id,)
-            ).fetchone()
-            if row is None or row["last_daily"] == today:
-                return False
-            conn.execute(
+            result = conn.execute(
                 "UPDATE users SET balance = balance + ?, last_daily = ?, daily_notified = 0, "
-                "max_balance = MAX(COALESCE(max_balance, 0), balance + ?) WHERE id = ?",
-                (amount, today, amount, user_id),
+                "max_balance = MAX(COALESCE(max_balance, 0), balance + ?) WHERE id = ? "
+                "AND (last_daily IS NULL OR last_daily != ?)",
+                (amount, today, amount, user_id, today),
             )
+            if result.rowcount != 1:
+                return False
             conn.execute(
                 "INSERT INTO transactions (user_id, amount, type, description) VALUES (?, ?, ?, ?)",
                 (user_id, amount, "daily", "Ежедневный бонус"),
@@ -514,16 +560,14 @@ class Database:
     def claim_weekly(self, user_id: int, amount: int) -> bool:
         week = current_week()
         with closing(self._connect()) as conn, conn:
-            row = conn.execute(
-                "SELECT last_weekly FROM users WHERE id = ?", (user_id,)
-            ).fetchone()
-            if row is None or row["last_weekly"] == week:
-                return False
-            conn.execute(
+            result = conn.execute(
                 "UPDATE users SET balance = balance + ?, last_weekly = ?, weekly_notified = 0, "
-                "max_balance = MAX(COALESCE(max_balance, 0), balance + ?) WHERE id = ?",
-                (amount, week, amount, user_id),
+                "max_balance = MAX(COALESCE(max_balance, 0), balance + ?) WHERE id = ? "
+                "AND (last_weekly IS NULL OR last_weekly != ?)",
+                (amount, week, amount, user_id, week),
             )
+            if result.rowcount != 1:
+                return False
             conn.execute(
                 "INSERT INTO transactions (user_id, amount, type, description) VALUES (?, ?, ?, ?)",
                 (user_id, amount, "weekly", "Еженедельный бонус"),
@@ -541,6 +585,7 @@ class Database:
                   AND last_daily IS NOT NULL
                   AND last_daily != ?
                   AND daily_notified = 0
+                  AND daily_reminder_enabled = 1
                 """,
                 (today,),
             ).fetchall()
@@ -557,6 +602,7 @@ class Database:
                   AND last_weekly IS NOT NULL
                   AND last_weekly != ?
                   AND weekly_notified = 0
+                  AND weekly_reminder_enabled = 1
                 """,
                 (week,),
             ).fetchall()
@@ -984,6 +1030,9 @@ class PostgresDatabase:
             cur.execute(
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_notified INTEGER NOT NULL DEFAULT 0"
             )
+            for kind in ("daily", "weekly"):
+                cur.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {kind}_reminder_enabled INTEGER NOT NULL DEFAULT 1")
+            cur.execute("CREATE INDEX IF NOT EXISTS transactions_user_id_idx ON transactions (user_id, id)")
             cur.execute(
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS max_balance BIGINT NOT NULL DEFAULT 0"
             )
@@ -1272,13 +1321,31 @@ class PostgresDatabase:
 
     # ---------- Транзакции ----------
 
-    def get_transactions(self, user_id: int, limit: int = 10) -> list[dict]:
+    def get_transactions(self, user_id: int, limit: int = 10, *, offset: int = 0,
+                         category: str = "all", before_id: int | None = None) -> list[dict]:
+        if limit < 1 or offset < 0:
+            raise ValueError("Invalid history page")
+        where, params = _transaction_where(user_id, category, before_id, "%s")
         with self._cursor() as cur:
             cur.execute(
-                "SELECT * FROM transactions WHERE user_id = %s ORDER BY id DESC LIMIT %s",
-                (user_id, limit),
+                f"SELECT * FROM transactions WHERE {where} ORDER BY id DESC LIMIT %s OFFSET %s",
+                (*params, limit, offset),
             )
             return [dict(r) for r in cur.fetchall()]
+
+    def count_transactions(self, user_id: int, *, category: str = "all",
+                           before_id: int | None = None) -> int:
+        where, params = _transaction_where(user_id, category, before_id, "%s")
+        with self._cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) AS total FROM transactions WHERE {where}", params)
+            return cur.fetchone()["total"]
+
+    def set_bonus_reminder(self, user_id: int, kind: str, enabled: bool) -> None:
+        if kind not in ("daily", "weekly"):
+            raise ValueError("Unknown bonus reminder")
+        with self._cursor() as cur:
+            cur.execute(f"UPDATE users SET {kind}_reminder_enabled = %s WHERE id = %s",
+                        (int(enabled), user_id))
 
     # ---------- Статистика ----------
 
@@ -1343,15 +1410,14 @@ class PostgresDatabase:
     def claim_daily(self, user_id: int, amount: int) -> bool:
         today = date.today().isoformat()
         with self._cursor() as cur:
-            cur.execute("SELECT last_daily FROM users WHERE id = %s", (user_id,))
-            row = cur.fetchone()
-            if row is None or row["last_daily"] == today:
-                return False
             cur.execute(
                 "UPDATE users SET balance = balance + %s, last_daily = %s, daily_notified = 0, "
-                "max_balance = GREATEST(COALESCE(max_balance, 0), balance + %s) WHERE id = %s",
-                (amount, today, amount, user_id),
+                "max_balance = GREATEST(COALESCE(max_balance, 0), balance + %s) WHERE id = %s "
+                "AND (last_daily IS NULL OR last_daily != %s)",
+                (amount, today, amount, user_id, today),
             )
+            if cur.rowcount != 1:
+                return False
             cur.execute(
                 "INSERT INTO transactions (user_id, amount, type, description) VALUES (%s, %s, %s, %s)",
                 (user_id, amount, "daily", "Ежедневный бонус"),
@@ -1361,15 +1427,14 @@ class PostgresDatabase:
     def claim_weekly(self, user_id: int, amount: int) -> bool:
         week = current_week()
         with self._cursor() as cur:
-            cur.execute("SELECT last_weekly FROM users WHERE id = %s", (user_id,))
-            row = cur.fetchone()
-            if row is None or row["last_weekly"] == week:
-                return False
             cur.execute(
                 "UPDATE users SET balance = balance + %s, last_weekly = %s, weekly_notified = 0, "
-                "max_balance = GREATEST(COALESCE(max_balance, 0), balance + %s) WHERE id = %s",
-                (amount, week, amount, user_id),
+                "max_balance = GREATEST(COALESCE(max_balance, 0), balance + %s) WHERE id = %s "
+                "AND (last_weekly IS NULL OR last_weekly != %s)",
+                (amount, week, amount, user_id, week),
             )
+            if cur.rowcount != 1:
+                return False
             cur.execute(
                 "INSERT INTO transactions (user_id, amount, type, description) VALUES (%s, %s, %s, %s)",
                 (user_id, amount, "weekly", "Еженедельный бонус"),
@@ -1386,6 +1451,7 @@ class PostgresDatabase:
                   AND last_daily IS NOT NULL
                   AND last_daily != %s
                   AND daily_notified = 0
+                  AND daily_reminder_enabled = 1
                 """,
                 (today,),
             )
@@ -1401,6 +1467,7 @@ class PostgresDatabase:
                   AND last_weekly IS NOT NULL
                   AND last_weekly != %s
                   AND weekly_notified = 0
+                  AND weekly_reminder_enabled = 1
                 """,
                 (week,),
             )
