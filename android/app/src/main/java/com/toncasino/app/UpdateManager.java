@@ -280,13 +280,14 @@ final class UpdateManager {
                 int sessionId = installer.createSession(params);
                 boolean committed = false;
                 try {
-                    try (PackageInstaller.Session session = installer.openSession(sessionId);
-                         InputStream input = new java.io.FileInputStream(update.file);
-                         OutputStream output = session.openWrite("base.apk", 0, update.file.length())) {
-                        byte[] buffer = new byte[32768];
-                        int count;
-                        while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
-                        session.fsync(output);
+                    try (PackageInstaller.Session session = installer.openSession(sessionId)) {
+                        try (InputStream input = new java.io.FileInputStream(update.file);
+                             OutputStream output = session.openWrite("base.apk", 0, update.file.length())) {
+                            byte[] buffer = new byte[32768];
+                            int count;
+                            while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+                            session.fsync(output);
+                        }
                         Intent status = new Intent(activity, UpdateInstallReceiver.class);
                         int flags = PendingIntent.FLAG_UPDATE_CURRENT;
                         if (Build.VERSION.SDK_INT >= 31) flags |= PendingIntent.FLAG_MUTABLE;
