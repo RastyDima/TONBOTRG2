@@ -35,6 +35,7 @@ if [ "$offline_seen" -ne 1 ]; then
   adb pull /sdcard/window.xml "$GITHUB_WORKSPACE/android/offline-failure.xml" >/dev/null 2>&1 || true
   adb exec-out screencap -p > "$GITHUB_WORKSPACE/android/offline-failure.png" || true
   adb logcat -d -s AndroidRuntime:E | tail -n 50 || true
+  adb logcat -d -s TonCasinoNetwork:I | tail -n 20 || true
 fi
 test "$offline_seen" -eq 1
 

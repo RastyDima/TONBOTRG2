@@ -12,6 +12,9 @@ import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.webkit.WebChromeClient;
@@ -37,6 +40,14 @@ public final class MainActivity extends Activity {
     private ConnectivityManager.NetworkCallback networkCallback;
     private UpdateManager updateManager;
     private boolean pageFailed;
+    private Boolean lastNetworkOnline;
+    private final Handler networkHandler = new Handler(Looper.getMainLooper());
+    private final Runnable networkPoll = new Runnable() {
+        @Override public void run() {
+            if (webView != null) onNetworkChanged();
+            networkHandler.postDelayed(this, 3000);
+        }
+    };
 
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
@@ -75,7 +86,12 @@ public final class MainActivity extends Activity {
     }
 
     private void onNetworkChanged() {
-        if (!hasInternet()) showFailure(true);
+        boolean online = hasInternet();
+        if (lastNetworkOnline == null || lastNetworkOnline != online) {
+            Log.i("TonCasinoNetwork", "validated network: " + online);
+            lastNetworkOnline = online;
+        }
+        if (!online) showFailure(true);
         else if (pageFailed && "Нет интернета".contentEquals(errorTitle.getText())) retryPage();
     }
 
@@ -225,11 +241,15 @@ public final class MainActivity extends Activity {
         super.onResume();
         if (webView != null) webView.onResume();
         if (updateManager != null) updateManager.onResume();
-        if (errorPanel != null && pageFailed) onNetworkChanged();
+        if (errorPanel != null) {
+            networkHandler.removeCallbacks(networkPoll);
+            networkHandler.post(networkPoll);
+        }
     }
 
     @Override
     protected void onPause() {
+        networkHandler.removeCallbacks(networkPoll);
         if (updateManager != null) updateManager.onPause();
         if (webView != null) webView.onPause();
         super.onPause();
