@@ -27,8 +27,14 @@ for attempt in $(seq 1 15); do
 done
 echo "Offline screen observed: $offline_seen"
 if [ "$offline_seen" -ne 1 ]; then
+  adb shell pidof com.toncasino.app || true
+  adb shell dumpsys activity activities | grep -E 'mResumed|topResumed' | head -n 8 || true
   adb shell dumpsys connectivity | grep -E 'VALIDATED|DefaultNetwork' | head -n 12 || true
+  adb shell uiautomator dump /sdcard/window.xml || true
   adb shell cat /sdcard/window.xml 2>/dev/null | grep -oE 'text="(Нет интернета|Сервер недоступен|Повторить)"' || true
+  adb pull /sdcard/window.xml "$GITHUB_WORKSPACE/android/offline-failure.xml" >/dev/null 2>&1 || true
+  adb exec-out screencap -p > "$GITHUB_WORKSPACE/android/offline-failure.png" || true
+  adb logcat -d -s AndroidRuntime:E | tail -n 50 || true
 fi
 test "$offline_seen" -eq 1
 

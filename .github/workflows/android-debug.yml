@@ -78,6 +78,14 @@ jobs:
           arch: x86_64
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: bash android/ci-smoke.sh
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: android-offline-diagnostics
+          path: |
+            android/offline-failure.xml
+            android/offline-failure.png
+          retention-days: 1
       - name: Publish signed GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
