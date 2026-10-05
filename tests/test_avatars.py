@@ -4,6 +4,7 @@ import base64
 import importlib.util
 import io
 import os
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -12,6 +13,9 @@ os.environ.setdefault("BOT_TOKEN", "offline-avatar-tests")
 os.environ.setdefault("RENDER", "false")
 os.environ.setdefault("ADMIN_PANEL_PASSWORD", "offline-avatar-tests")
 os.environ.setdefault("WEBHOOK_SECRET", "offline-avatar-tests")
+_scratch = tempfile.TemporaryDirectory()
+os.environ.setdefault("DATABASE_PATH", os.path.join(_scratch.name, "avatars-test.db"))
+os.environ.setdefault("DATABASE_URL", "")
 
 from PIL import Image
 from utils import avatars
