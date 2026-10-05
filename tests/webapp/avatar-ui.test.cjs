@@ -28,6 +28,9 @@ async function openApp(t, avatarResponse) {
         errors.push(error.message);
         console.error('WebApp browser error:', error.message);
     });
+    page.on('console', message => {
+        if (message.type() === 'error') console.error('Browser console:', message.text());
+    });
     await page.addInitScript(() => {
         localStorage.setItem('webapp_token', 'signed-session');
         window.__avatarImageErrors = 0;
@@ -37,7 +40,8 @@ async function openApp(t, avatarResponse) {
     });
     await page.route('**/*', async route => {
         const request = route.request(), url = new URL(request.url());
-        const file = (filename, contentType) => route.fulfill({ body: fs.readFileSync(filename), contentType });
+        const file = (filename, contentType) => route.fulfill({ body: fs.readFileSync(filename),
+            contentType, headers: { 'Access-Control-Allow-Origin': '*' } });
         const json = body => route.fulfill({ json: body });
         if (url.hostname === 'telegram.org') return route.fulfill({ body: '', contentType: 'text/javascript' });
         if (url.hostname === 'unpkg.com') {
