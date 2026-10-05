@@ -146,11 +146,13 @@ function NavBar({ page, onNavigate }) {
 }
 
 function FrameAvatar({ frame, photoUrl, initials, small = false, large = false }) {
+    const [failedUrl, setFailedUrl] = useState(null);
     const frameId = FRAME_EMBLEMS[frame] ? frame : 'default';
     return (
         <div className={`frame-avatar frame-avatar--${frameId}${small ? ' frame-avatar--small' : ''}${large ? ' frame-avatar--large' : ''}`}>
             <div className="frame-avatar-core">
-                {photoUrl ? <img src={photoUrl} alt="" /> : initials}
+                {photoUrl && failedUrl !== photoUrl
+                    ? <img src={photoUrl} alt="" onError={() => setFailedUrl(photoUrl)} /> : initials}
             </div>
             {FRAME_EMBLEMS[frame] && (
                 <span className="frame-avatar-emblem" aria-hidden="true">{FRAME_EMBLEMS[frame]}</span>
@@ -260,7 +262,7 @@ function DevicesCard() {
     </div>;
 }
 
-function ProfilePage({ profile, refreshProfile }) {
+function ProfilePage({ profile, refreshProfile, photoUrl }) {
     const [editingShowcase, setEditingShowcase] = useState(false);
     const [showcaseBusy, setShowcaseBusy] = useState(false);
     const [showcaseError, setShowcaseError] = useState('');
@@ -298,8 +300,6 @@ function ProfilePage({ profile, refreshProfile }) {
         title_owner: 'OWNER', title_ket: 'KET',
     };
     const initials = (profile.first_name || 'K')[0].toUpperCase();
-    const tgUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
-    const photoUrl = tgUser?.photo_url;
 
     return (
         <div className="page profile-page">
@@ -665,12 +665,11 @@ function GamesPage({ profile, refreshProfile }) {
     );
 }
 
-function ShopPage({ profile, refreshProfile }) {
+function ShopPage({ profile, refreshProfile, photoUrl }) {
     const [shop, setShop] = useState(null);
     const [category, setCategory] = useState('frames');
     const [toast, setToast] = useState(null);
     const [tryOn, setTryOn] = useState(null);
-    const photoUrl = window.Telegram?.WebApp?.initDataUnsafe?.user?.photo_url;
     const initials = (profile?.first_name || 'И')[0].toUpperCase();
 
     useEffect(() => {
@@ -1151,15 +1150,69 @@ function AndroidPairScreen({ onAuth }) {
     );
 }
 
+function useAvatar(userId, refreshKey) {
+    const [avatar, setAvatar] = useState(null);
+    useEffect(() => {
+        setAvatar(null);
+        if (!userId) return;
+        let disposed = false, objectUrl = null, controller = null, retryTimer = null;
+        const load = async (attempt = 0) => {
+            controller?.abort();
+            clearTimeout(retryTimer);
+            const requestController = new AbortController();
+            controller = requestController;
+            const token = localStorage.getItem('webapp_token');
+            if (!token) return;
+            try {
+                const blob = await AvatarMedia.load(token, requestController.signal);
+                if (disposed || controller !== requestController) return;
+                const nextUrl = blob ? URL.createObjectURL(blob) : null;
+                if (objectUrl) URL.revokeObjectURL(objectUrl);
+                objectUrl = nextUrl;
+                setAvatar({ userId, url: objectUrl });
+            } catch (error) {
+                if (disposed || controller !== requestController || error.name === 'AbortError') return;
+                if (error.status === 401) {
+                    if (localStorage.getItem('webapp_token') === token) {
+                        localStorage.removeItem('webapp_token');
+                        window.dispatchEvent(new Event('webapp-auth-expired'));
+                    }
+                } else if (attempt < 2) {
+                    retryTimer = setTimeout(() => load(attempt + 1), 3000 * (attempt + 1));
+                }
+            }
+        };
+        const onVisible = () => { if (!document.hidden) load(); };
+        const onOnline = () => load();
+        load();
+        window.addEventListener('online', onOnline);
+        document.addEventListener('visibilitychange', onVisible);
+        return () => {
+            disposed = true;
+            controller?.abort();
+            clearTimeout(retryTimer);
+            if (objectUrl) URL.revokeObjectURL(objectUrl);
+            window.removeEventListener('online', onOnline);
+            document.removeEventListener('visibilitychange', onVisible);
+        };
+    }, [userId, refreshKey]);
+    return avatar?.userId === userId ? avatar.url : null;
+}
+
 function App() {
     const [user, setUser] = useState(null);
     const [profile, setProfile] = useState(null);
     const [page, setPage] = useState('profile');
     const [loading, setLoading] = useState(true);
+    const [avatarRefresh, setAvatarRefresh] = useState(0);
+    const photoUrl = useAvatar(user?.user_id, avatarRefresh);
 
     const refreshProfile = useCallback(() => {
         if (!user) return;
-        return api('/profile').then(setProfile).catch(() => {});
+        return api('/profile').then(p => {
+            setProfile(p);
+            setAvatarRefresh(value => value + 1);
+        }).catch(() => {});
     }, [user]);
 
     useEffect(() => {
@@ -1240,9 +1293,9 @@ function App() {
                 <div className="header-spark" aria-hidden="true">✧</div>
             </div>
 
-            {page === 'profile' && <ProfilePage profile={profile} refreshProfile={refreshProfile} />}
+            {page === 'profile' && <ProfilePage profile={profile} refreshProfile={refreshProfile} photoUrl={photoUrl} />}
             {page === 'games' && <GamesPage profile={profile} refreshProfile={refreshProfile} />}
-            {page === 'shop' && <ShopPage profile={profile} refreshProfile={refreshProfile} />}
+            {page === 'shop' && <ShopPage profile={profile} refreshProfile={refreshProfile} photoUrl={photoUrl} />}
             {page === 'ref' && <ReferralPage profile={profile} />}
             {page === 'leaderboard' && <LeaderboardPage profile={profile} />}
 
