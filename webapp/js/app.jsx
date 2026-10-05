@@ -1196,7 +1196,7 @@ function useAvatar(userId, refreshKey) {
             document.removeEventListener('visibilitychange', onVisible);
         };
     }, [userId, refreshKey]);
-    return avatar?.userId === userId ? avatar.url : null;
+    return avatar && avatar.userId === userId ? avatar.url : null;
 }
 
 function App() {
