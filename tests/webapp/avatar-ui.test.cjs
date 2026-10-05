@@ -19,10 +19,15 @@ after(async () => { await browser?.close(); });
 
 async function openApp(t, avatarResponse) {
     const context = await browser.newContext();
+    context.setDefaultTimeout(10000);
+    context.setDefaultNavigationTimeout(10000);
     t.after(() => context.close());
     const page = await context.newPage();
     const requests = [], errors = [];
-    page.on('pageerror', error => errors.push(error.message));
+    page.on('pageerror', error => {
+        errors.push(error.message);
+        console.error('WebApp browser error:', error.message);
+    });
     await page.addInitScript(() => {
         localStorage.setItem('webapp_token', 'signed-session');
         window.__avatarImageErrors = 0;
@@ -56,7 +61,12 @@ async function openApp(t, avatarResponse) {
         return route.fulfill({ status: 404 });
     });
     await page.goto('http://avatar.local/app/?client=android');
-    await page.waitForSelector('.profile-header');
+    try {
+        await page.waitForSelector('.profile-header');
+    } catch (error) {
+        console.error('WebApp DOM:', await page.locator('#root').innerHTML());
+        throw error;
+    }
     return { page, requests, errors };
 }
 
