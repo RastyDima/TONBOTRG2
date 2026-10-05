@@ -6,25 +6,16 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import asyncio
 import logging
-import urllib.request
-import ssl
-import json
-from functools import partial
-
-from config import BOT_TOKEN
 from database import db
 from keyboards.common import back_button
 from utils.helpers import balance_text
 from utils.profile_card import generate_profile_card
 from utils.achievement_card import generate_achievements_card
 from utils.achievements import ACHIEVEMENTS
+from utils.avatars import AvatarUnavailable, get_avatar
 
 router = Router()
 log = logging.getLogger(__name__)
-
-_SSL_CTX = ssl.create_default_context()
-_SSL_CTX.check_hostname = False
-_SSL_CTX.verify_mode = ssl.CERT_NONE
 
 
 def profile_kb():
@@ -42,74 +33,20 @@ def balance_kb():
     return kb.as_markup()
 
 
-def _fetch_avatar_sync(user_id: int) -> tuple[bytes | None, bool]:
-    """Возвращает (avatar_bytes, is_animated).
-
-    Видео-аватары Telegram (mp4) Pillow открыть не может, поэтому для них
-    качаем статичный thumbnail — иначе вместо фото были бы инициалы.
-    GIF-байты (если придут) обрабатываются как анимация в profile_card.
-    """
-    try:
-        base = f"https://api.telegram.org/bot{BOT_TOKEN}"
-
-        photos_url = f"{base}/getUserProfilePhotos?user_id={user_id}&limit=1"
-        req1 = urllib.request.Request(photos_url)
-        with urllib.request.urlopen(req1, context=_SSL_CTX, timeout=10) as resp:
-            data = json.loads(resp.read())
-        if not data.get("ok") or not data["result"]["photos"]:
-            return None, False
-
-        photo_entry = data["result"]["photos"][0]
-        last = photo_entry[-1]
-
-        is_animated = False
-        if "video" in last:
-            video = last["video"]
-            thumb = video.get("thumb") if isinstance(video, dict) else None
-            if thumb and thumb.get("file_id"):
-                file_id = thumb["file_id"]
-            elif "photo" in last:
-                file_id = last["photo"]["file_id"]
-            else:
-                return None, False
-        elif "photo" in last:
-            file_id = last["photo"]["file_id"]
-        else:
-            file_id = last.get("file_id")
-            if not file_id:
-                return None, False
-
-        file_url = f"{base}/getFile?file_id={file_id}"
-        req2 = urllib.request.Request(file_url)
-        with urllib.request.urlopen(req2, context=_SSL_CTX, timeout=10) as resp2:
-            data2 = json.loads(resp2.read())
-        if not data2.get("ok"):
-            return None, False
-
-        file_path = data2["result"]["file_path"]
-        dl_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
-        req3 = urllib.request.Request(dl_url)
-        with urllib.request.urlopen(req3, context=_SSL_CTX, timeout=10) as resp3:
-            avatar = resp3.read()
-        return avatar, is_animated
-    except Exception as e:
-        log.warning("Sync avatar fetch failed for %s: %s", user_id, e)
-        return None, False
-
-
 async def _get_avatar(user_id: int) -> tuple[bytes | None, bool]:
-    import asyncio
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, partial(_fetch_avatar_sync, user_id))
-
+    try:
+        avatar = await get_avatar(user_id)
+    except AvatarUnavailable:
+        return None, False
+    return (avatar.data, avatar.content_type == "image/gif") if avatar else (None, False)
 
 async def _make_card(user, stats, ref_count, from_user, frame_override=None):
-    avatar_bytes, is_animated = await _get_avatar(user["id"])
+    avatar_bytes, _ = await _get_avatar(user["id"])
     ach_count = len(db.get_achievements(user["id"]))
     from utils.achievements import TOTAL as ACH_TOTAL
     showcase = [ACHIEVEMENTS[award_id]["name"] for award_id in db.get_showcase(user["id"])
                 if award_id in ACHIEVEMENTS]
-    card_buf = generate_profile_card(
+    card_buf = await asyncio.to_thread(generate_profile_card,
         user_id=user["id"],
         name=user["first_name"] or "Игрок",
         balance=user["balance"],
@@ -133,6 +70,14 @@ async def _make_card(user, stats, ref_count, from_user, frame_override=None):
     return (f"profile.{ext}", card_buf.getvalue())
 
 
+async def _send_profile_card(message, filename, data):
+    media = BufferedInputFile(data, filename=filename)
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        await message.answer_animation(animation=media, reply_markup=profile_kb())
+    else:
+        await message.answer_photo(photo=media, reply_markup=profile_kb())
+
+
 @router.message(Command("profile"))
 async def profile_command(message: Message):
     user = db.get_user(message.from_user.id)
@@ -141,19 +86,8 @@ async def profile_command(message: Message):
         return
     stats = db.get_stats(message.from_user.id)
     ref_count = user.get("referral_count", 0) or 0
-    filename, photo_bytes = await _make_card(user, stats, ref_count, message.from_user)
-    from aiogram.types import FSInputFile
-    import tempfile, os
-    tmp = os.path.join(tempfile.gettempdir(), filename)
-    with open(tmp, "wb") as f:
-        f.write(photo_bytes)
-    try:
-        await message.answer_photo(photo=FSInputFile(tmp), reply_markup=profile_kb())
-    finally:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
+    filename, data = await _make_card(user, stats, ref_count, message.from_user)
+    await _send_profile_card(message, filename, data)
 
 
 @router.callback_query(F.data == "profile", StateFilter("*"))
@@ -166,23 +100,13 @@ async def profile_callback(callback: CallbackQuery, state: FSMContext):
         return
     stats = db.get_stats(callback.from_user.id)
     ref_count = user.get("referral_count", 0) or 0
-    filename, photo_bytes = await _make_card(user, stats, ref_count, callback.from_user)
-    from aiogram.types import FSInputFile
-    import tempfile, os
-    tmp = os.path.join(tempfile.gettempdir(), filename)
-    with open(tmp, "wb") as f:
-        f.write(photo_bytes)
+    filename, data = await _make_card(user, stats, ref_count, callback.from_user)
+    await _send_profile_card(callback.message, filename, data)
     try:
-        try:
-            await callback.message.delete()
-        except Exception:
-            pass
-        await callback.message.answer_photo(photo=FSInputFile(tmp), reply_markup=profile_kb())
-    finally:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
+        await callback.message.delete()
+    except Exception:
+        pass
+
 
 
 @router.callback_query(F.data == "balance", StateFilter("*"))

@@ -12,6 +12,7 @@ from games.mines import FIELD_SIZE, MAX_MINES, MIN_MINES, MinesGame
 from handlers.shop import SHOP_ITEMS, FRAME_BY_ID, TITLE_BY_ID, ALL_BY_ID
 from mobile_pairing import consume_pairing, create_pairing
 from utils.achievements import ACHIEVEMENTS
+from utils.avatars import AvatarUnavailable, get_avatar
 from utils.game_registry import cancel_game, cashout_game, lose_game, registry
 from webapp_auth import (MOBILE_SESSION_TTL, issue_session_token,
                          validate_telegram_init_data, verify_session)
@@ -99,7 +100,7 @@ def register_webapp_routes(app: web.Application) -> None:
     # --- SPA entry point ---
     async def serve_index(request):
         index_path = str(WEBAPP_STATIC_DIR / "index.html")
-        return web.FileResponse(index_path)
+        return web.FileResponse(index_path, headers={"Cache-Control": "no-cache"})
 
     app.router.add_get(f"{WEBAPP_API_PREFIX}/", serve_index)
     app.router.add_get(f"{WEBAPP_API_PREFIX}", serve_index)
@@ -338,6 +339,20 @@ def register_webapp_routes(app: web.Application) -> None:
 
     # --- Profile ---
 
+    async def api_avatar(request):
+        user = await _auth_user(request)
+        if not user:
+            return _json_response({"error": "unauthorized"}, 401)
+        try:
+            avatar = await get_avatar(user["id"])
+        except AvatarUnavailable:
+            return web.json_response({"error": "avatar temporarily unavailable"}, status=503,
+                                     headers={"Cache-Control": "no-store", "Retry-After": "30"})
+        headers = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
+        if avatar is None:
+            return web.Response(status=204, headers=headers)
+        return web.Response(body=avatar.data, content_type=avatar.content_type, headers=headers)
+
     async def api_profile(request):
         user = await _auth_user(request)
         if not user:
@@ -568,6 +583,7 @@ def register_webapp_routes(app: web.Application) -> None:
     app.router.add_post(f"{WEBAPP_API_PREFIX}/api/mines/cashout", api_mines_cashout)
     app.router.add_post(f"{WEBAPP_API_PREFIX}/api/mines/cancel", api_mines_cancel)
     app.router.add_get(f"{WEBAPP_API_PREFIX}/api/profile", api_profile)
+    app.router.add_get(f"{WEBAPP_API_PREFIX}/api/profile/avatar", api_avatar)
     app.router.add_post(f"{WEBAPP_API_PREFIX}/api/profile/showcase", api_showcase_toggle)
     app.router.add_get(f"{WEBAPP_API_PREFIX}/api/shop", api_shop)
     app.router.add_post(f"{WEBAPP_API_PREFIX}/api/shop/buy", api_shop_buy)
