@@ -88,6 +88,7 @@ test('Android without Telegram user data loads the same GIF in profile and shop'
     assert.ok(url.startsWith('blob:'));
     const loadedBytes = await page.evaluate(async src => Array.from(new Uint8Array(await (await fetch(src)).arrayBuffer())), url);
     assert.deepEqual(Buffer.from(loadedBytes), gif);
+    await page.getByRole('navigation').getByRole('button', { name: 'Ещё' }).click();
     await page.getByRole('button', { name: 'Магазин' }).click();
     await page.waitForFunction(() => document.querySelector('.shop-card img')?.naturalWidth === 16);
     assert.equal(await page.locator('.shop-card img').getAttribute('src'), url);
@@ -105,6 +106,25 @@ async function preview(page, name) {
     await page.screenshot({ path: path.join(previews, name + '.png'), fullPage: true, animations: 'disabled' });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true,
         name + ' must fit a 360px screen');
+    assert.equal(await page.evaluate(() => {
+        const avatar = document.querySelector('.profile-header .frame-avatar');
+        if (!avatar) return true;
+        const parent = avatar.closest('.profile-header').getBoundingClientRect();
+        const core = avatar.getBoundingClientRect(), style = getComputedStyle(avatar, '::before');
+        const width = parseFloat(style.width), height = parseFloat(style.height);
+        const left = core.left + parseFloat(style.left), top = core.top + parseFloat(style.top);
+        const matrix = new DOMMatrix(style.transform === 'none' ? undefined : style.transform);
+        const corners = [[0, 0], [width, 0], [width, height], [0, height]].map(([x, y]) => {
+            const point = matrix.transformPoint({ x: x - width / 2, y: y - height / 2 });
+            return { x: left + width / 2 + point.x, y: top + height / 2 + point.y };
+        });
+        const inside = rect => rect.left >= parent.left && rect.top >= parent.top
+            && rect.right <= parent.right && rect.bottom <= parent.bottom;
+        const border = { left: Math.min(...corners.map(p => p.x)), right: Math.max(...corners.map(p => p.x)),
+            top: Math.min(...corners.map(p => p.y)), bottom: Math.max(...corners.map(p => p.y)) };
+        const emblem = avatar.querySelector('.frame-avatar-emblem');
+        return inside(core) && inside(border) && (!emblem || inside(emblem.getBoundingClientRect()));
+    }), true, name + ' avatar ornaments must stay inside the card');
 }
 
 test('daily and weekly bonuses share a page and reminders survive refresh', async t => {
@@ -161,9 +181,10 @@ test('history navigation keeps its snapshot and supports empty filters', async t
 
 test('profile saves theme, favorites, bet and animated avatar across navigation', async t => {
     const current = player();
+    current.active_frame = 'frame_diamond';
     let uploaded = false;
     const { page, errors } = await openApp(t, async () => uploaded ? { body: gif, contentType: 'image/gif' } : { status: 204 }, {
-        profile: current, handleApi: async (request, url) => {
+        profile: current, context: { viewport: { width: 320, height: 780 } }, handleApi: async (request, url) => {
             if (url.pathname === '/app/api/preferences') {
                 Object.assign(current.preferences, request.postDataJSON());
                 return { json: current.preferences };
@@ -235,13 +256,15 @@ test('statistics and weekly rankings use real requested periods', async t => {
             if (url.pathname === '/app/api/leaderboard') return { json: { my_rank: 24, players: [
                 { user_id: 202, first_name: 'Иван', score: 3, rank: 1, is_me: false }] } };
         } });
-    await page.locator('.quick-grid').getByRole('button', { name: 'Статистика' }).click();
+    await page.getByRole('navigation').getByRole('button', { name: 'Ещё' }).click();
+    await page.getByRole('button', { name: 'Статистика' }).click();
     await page.getByRole('button', { name: '7 дней', exact: true }).click();
     await page.getByRole('img', { name: 'График баланса за 7 дней' }).waitFor();
     assert.ok(paths.includes('/app/api/statistics?days=7'));
     await preview(page, 'statistics-dark');
     await page.getByRole('navigation').getByRole('button', { name: 'Главная' }).click();
-    await page.locator('.quick-grid').getByRole('button', { name: 'Рейтинг' }).click();
+    await page.getByRole('navigation').getByRole('button', { name: 'Ещё' }).click();
+    await page.getByRole('button', { name: 'Рейтинг' }).click();
     await page.getByRole('button', { name: 'Неделя', exact: true }).click();
     await page.getByText('#24', { exact: true }).waitFor();
     assert.ok(paths.includes('/app/api/leaderboard?mode=wins&period=week&limit=20'));

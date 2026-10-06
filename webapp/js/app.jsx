@@ -238,10 +238,6 @@ function DashboardPage({ profile, photoUrl, onNavigate }) {
             <span className="bonus-banner-icon">🎁</span><span><strong>{available === null ? 'Ваши бонусы' : available ? 'Доступно бонусов: ' + available : 'Бонусы получены'}</strong>
                 <small>Ежедневный и недельный в одном месте</small></span><span>→</span>
         </button>
-        <div className="quick-grid">
-            {[['games', '🎮', 'Играть'], ['shop', '🛒', 'Магазин'], ['statistics', '📈', 'Статистика'], ['leaderboard', '🏆', 'Рейтинг']].map(item =>
-                <button key={item[0]} onClick={() => onNavigate(item[0])}><span>{item[1]}</span>{item[2]}</button>)}
-        </div>
         <div className="section-heading"><h3>Ваши игры</h3><span>⭐ {prefs.favorites?.length || 0} в избранном</span></div>
         <div className="game-catalog">{GAME_CATALOG.filter(game => !prefs.favorites?.length || prefs.favorites.includes(game.id)).map(game =>
             game.id === 'mines' || game.id === 'coinflip'
