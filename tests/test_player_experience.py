@@ -2,6 +2,7 @@
 import asyncio
 import csv
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -25,6 +26,13 @@ from utils.player_views import history_csv
 
 
 class PlayerDatabaseCases:
+    def test_statistics_are_json_serializable_with_integer_totals(self):
+        self.db.play_coinflip(101, "f" * 32, 100, "орёл", "орёл")
+        result = self.db.player_statistics(101, 7)
+        self.assertEqual(json.loads(json.dumps(result)), result)
+        self.assertIs(type(result["games"][0]["bets"]), int)
+        self.assertEqual(result["games"][0]["payouts"], 185)
+
     def test_preferences_and_favorites_persist_without_changing_other_users(self):
         self.db.set_player_preferences(101, {"bio": "Привет <b>мир</b>", "theme": "light", "saved_bet": 250, "hide_stats": True})
         self.db.set_favorite(101, "mines", True)

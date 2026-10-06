@@ -120,7 +120,9 @@ class PlayerFeaturesMixin:
                 SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) AS wins,
                 SUM(bet) AS bets, SUM(win_amount) AS payouts FROM games
                 WHERE user_id = ? AND created_at >= ? AND result IN ('win', 'lose') GROUP BY game_type"""), (user_id, start.isoformat()))
-            games = [dict(row) for row in cur.fetchall()]
+            games = [{"game_type": row["game_type"],
+                      **{key: int(row[key] or 0) for key in ("games", "wins", "bets", "payouts")}}
+                     for row in cur.fetchall()]
             cur.execute(self._player_sql("""SELECT SUBSTR(created_at, 1, 10) AS day, SUM(amount) AS change
                 FROM transactions WHERE user_id = ? AND created_at >= ?
                 GROUP BY SUBSTR(created_at, 1, 10) ORDER BY day"""), (user_id, start.isoformat()))
