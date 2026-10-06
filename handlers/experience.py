@@ -5,6 +5,7 @@ import io
 from datetime import datetime
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -27,6 +28,22 @@ class ProfileSettings(StatesGroup):
     avatar = State()
     bio = State()
     bet = State()
+
+
+async def show_text(message, text, markup):
+    """Profile cards are media messages; settings need a separate text message."""
+    if getattr(message, "photo", None) or getattr(message, "animation", None):
+        await message.answer(text, reply_markup=markup)
+        try:
+            await message.delete()
+        except TelegramBadRequest:
+            pass
+        return
+    try:
+        await message.edit_text(text, reply_markup=markup)
+    except TelegramBadRequest as error:
+        if "message is not modified" not in str(error).lower():
+            raise
 
 
 def settings_kb(user_id):
@@ -71,7 +88,7 @@ async def settings_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     if not db.get_user(callback.from_user.id):
         return
-    await callback.message.edit_text(settings_text(callback.from_user.id), reply_markup=settings_kb(callback.from_user.id))
+    await show_text(callback.message, settings_text(callback.from_user.id), settings_kb(callback.from_user.id))
 
 
 @router.message(Command("avatar", "bio", "bet"))
@@ -164,14 +181,14 @@ async def privacy(callback: CallbackQuery):
         return
     db.set_player_preferences(callback.from_user.id, {"hide_stats": callback.data.endswith(":1")})
     await callback.answer("Настройки сохранены")
-    await callback.message.edit_text(settings_text(callback.from_user.id), reply_markup=settings_kb(callback.from_user.id))
+    await show_text(callback.message, settings_text(callback.from_user.id), settings_kb(callback.from_user.id))
 
 
 @router.callback_query(F.data == "profile_avatar_reset", StateFilter("*"))
 async def avatar_reset(callback: CallbackQuery):
     db.delete_custom_avatar(callback.from_user.id)
     await callback.answer("Теперь используется фото Telegram")
-    await callback.message.edit_text(settings_text(callback.from_user.id), reply_markup=settings_kb(callback.from_user.id))
+    await show_text(callback.message, settings_text(callback.from_user.id), settings_kb(callback.from_user.id))
 
 
 def favorites_screen(user_id):
@@ -212,7 +229,7 @@ async def favorites_callback(callback: CallbackQuery, state: FSMContext):
         db.set_favorite(callback.from_user.id, parts[1], parts[2] == "1")
     await callback.answer()
     text, markup = favorites_screen(callback.from_user.id)
-    await callback.message.edit_text(text, reply_markup=markup)
+    await show_text(callback.message, text, markup)
 
 
 @router.callback_query(F.data.startswith("favorite_play:"), StateFilter("*"))
@@ -270,7 +287,7 @@ async def resume_callback(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.answer()
     text, markup = active_screen(callback.from_user.id)
-    await callback.message.edit_text(text, reply_markup=markup)
+    await show_text(callback.message, text, markup)
 
 
 def devices_screen(user_id):
@@ -310,7 +327,7 @@ async def devices_callback(callback: CallbackQuery):
         db.revoke_other_mobile_sessions(callback.from_user.id, None)
     await callback.answer()
     text, markup = devices_screen(callback.from_user.id)
-    await callback.message.edit_text(text, reply_markup=markup)
+    await show_text(callback.message, text, markup)
 
 
 @router.message(Command("stats"))

@@ -122,6 +122,7 @@ function Stars({ filled, color = '#9656ff' }) {
 }
 
 function NavBar({ page, onNavigate }) {
+    const activePage = page === 'coinflip' ? 'games' : ['shop', 'statistics', 'leaderboard', 'ref'].includes(page) ? 'more' : page;
     const items = [
         { id: 'home', icon: '✦', label: 'Главная' },
         { id: 'games', icon: '🎮', label: 'Игры' },
@@ -136,9 +137,9 @@ function NavBar({ page, onNavigate }) {
                 <button
                     key={it.id}
                     type="button"
-                    className={`nav-item ${page === it.id ? 'active' : ''}`}
+                    className={`nav-item ${activePage === it.id ? 'active' : ''}`}
                     onClick={() => onNavigate(it.id)}
-                    aria-current={page === it.id ? 'page' : undefined}
+                    aria-current={activePage === it.id ? 'page' : undefined}
                 >
                     <span className="nav-icon">{it.icon}</span>
                     {it.label}
@@ -987,15 +988,16 @@ function GamesPage({ profile, refreshProfile, onNavigate }) {
             </div>
             <div className="games-grid">
                 {[
-                    { icon: '🃏', name: 'Джокер', desc: 'Пока в боте' },
-                    { icon: '⚗️', name: 'Алхимик', desc: 'Пока в боте' },
-                    { icon: '🂡', name: '21', desc: 'Пока в боте' },
+                    { id: 'joker', icon: '🃏', name: 'Джокер', desc: 'Открыть в Telegram' },
+                    { id: 'alchemist', icon: '⚗️', name: 'Алхимик', desc: 'Открыть в Telegram' },
+                    { id: 'blackjack', icon: '🂡', name: '21', desc: 'Открыть в Telegram' },
+                    { id: 'ruby_roulette', icon: '🎰', name: 'Рулетка', desc: 'Открыть в Telegram' },
                 ].map(game => (
-                    <div key={game.name} className="game-card game-card--disabled">
+                    <a key={game.id} className="game-card" href={botUrl(profile, 'play_' + game.id)}>
                         <div className="game-icon">{game.icon}</div>
                         <div className="game-name">{game.name}</div>
                         <div className="game-desc">{game.desc}</div>
-                    </div>
+                    </a>
                 ))}
             </div>
         </div>

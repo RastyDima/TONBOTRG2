@@ -47,6 +47,15 @@ class BotExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.message.answer.assert_awaited_once()
         self.assertIsNotNone(self.message.answer.await_args.kwargs["reply_markup"])
 
+    async def test_settings_open_from_an_animated_profile_card(self):
+        self.message.animation = object()
+        self.message.delete = AsyncMock()
+        await experience.settings_callback(self.callback, self.state)
+        self.message.edit_text.assert_not_awaited()
+        self.message.answer.assert_awaited_once()
+        self.assertIn("Ваш профиль и настройки", self.message.answer.await_args.args[0])
+        self.message.delete.assert_awaited_once()
+
     async def test_explicit_favorite_callback_is_idempotent_and_owned(self):
         self.callback.data = "favorite_set:mines:1"
         await experience.favorites_callback(self.callback, self.state)

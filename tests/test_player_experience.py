@@ -166,7 +166,13 @@ class SQLitePlayerTests(PlayerDatabaseCases, unittest.TestCase):
 class PostgreSQLPlayerTests(PlayerDatabaseCases, unittest.TestCase):
     def setUp(self):
         import psycopg2
+        import psycopg2.pool
+        import database
+        from psycopg2.extras import RealDictCursor
         from psycopg2.extensions import make_dsn
+        driver = patch.multiple(database, psycopg2=psycopg2, RealDictCursor=RealDictCursor, create=True)
+        driver.start()
+        self.addCleanup(driver.stop)
         self.admin = psycopg2.connect(os.environ["TEST_POSTGRES_URL"])
         self.admin.autocommit = True
         self.addCleanup(self.admin.close)
