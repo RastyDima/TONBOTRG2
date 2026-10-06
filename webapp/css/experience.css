@@ -178,6 +178,9 @@ body[data-theme="light"] .btn-primary { color:white; }
 .coinflip-card > .btn { margin-top:12px; }
 .coin-result { border-top:1px solid var(--border); margin-top:20px; padding:20px 0 0; }
 @media(max-width:360px) {
+    .dashboard-hero { gap:12px; }
+    .dashboard-hero .eyebrow { letter-spacing:.4px; }
+    .dashboard-hero .muted { font-size:12px; }
     .card { padding:16px; } .transaction-list { padding:0 12px; }
     .transaction-row { gap:8px; } .transaction-icon { width:28px; height:28px; } .transaction-row > strong { font-size:11px; }
 }
