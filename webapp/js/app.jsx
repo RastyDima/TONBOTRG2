@@ -3,6 +3,8 @@ const { useState, useEffect, useCallback, createContext, useContext } = React;
 const API_BASE = '/app/api';
 const IS_ANDROID_SHELL = new URLSearchParams(window.location.search).get('client') === 'android';
 const HAS_NATIVE_UPDATES = IS_ANDROID_SHELL && navigator.userAgent.includes('TonCasinoAndroid/');
+const nativeVersion = (navigator.userAgent.match(/TonCasinoAndroid\/([0-9.]+)/)?.[1] || '0.0').split('.').map(Number);
+const HAS_NATIVE_SECURITY = HAS_NATIVE_UPDATES && (nativeVersion[0] > 0 || nativeVersion[1] >= 4);
 
 const TITLE_COLORS = {
     title_spark: { color: '#ffb86c', bg: 'rgba(255,184,108,0.15)' },
@@ -37,11 +39,11 @@ function api(path, options = {}) {
     const token = localStorage.getItem('webapp_token');
     const headers = { 'Content-Type': 'application/json' };
     if (token) headers['Authorization'] = `Bearer ${token}`;
-    return fetch(`${API_BASE}${path}`, { ...options, headers: { ...headers, ...options.headers } })
+    return fetch(`${API_BASE}${path}`, { cache: 'no-store', ...options, headers: { ...headers, ...options.headers } })
         .then(async r => {
             const data = await r.json().catch(() => ({ error: 'request failed' }));
             if (!r.ok) {
-                if (r.status === 401) {
+                if (r.status === 401 && localStorage.getItem('webapp_token') === token) {
                     localStorage.removeItem('webapp_token');
                     window.dispatchEvent(new Event('webapp-auth-expired'));
                 }
@@ -54,7 +56,7 @@ function api(path, options = {}) {
 }
 
 function formatNumber(n) {
-    return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    return Number(n || 0).toLocaleString('ru-RU');
 }
 
 function calcLevel(xp) {
@@ -121,11 +123,12 @@ function Stars({ filled, color = '#9656ff' }) {
 
 function NavBar({ page, onNavigate }) {
     const items = [
-        { id: 'profile', icon: '👤', label: 'Профиль' },
-        { id: 'leaderboard', icon: '🏆', label: 'Рейтинг' },
+        { id: 'home', icon: '✦', label: 'Главная' },
         { id: 'games', icon: '🎮', label: 'Игры' },
-        { id: 'shop', icon: '🛒', label: 'Магазин' },
-        { id: 'ref', icon: '👥', label: 'Рефералы' },
+        { id: 'bonuses', icon: '🎁', label: 'Бонусы' },
+        { id: 'history', icon: '↗', label: 'История' },
+        { id: 'profile', icon: '👤', label: 'Профиль' },
+        { id: 'more', icon: '⋯', label: 'Ещё' },
     ];
     return (
         <nav className="nav-bar" aria-label="Разделы приложения">
@@ -159,6 +162,338 @@ function FrameAvatar({ frame, photoUrl, initials, small = false, large = false }
             )}
         </div>
     );
+}
+
+const GAME_CATALOG = [
+    { id: 'mines', name: 'Мины', icon: '💣', desc: 'Открывайте поле и забирайте выигрыш' },
+    { id: 'coinflip', name: 'Монетка', icon: '🪙', desc: 'Орёл или решка · выплата ×1,85' },
+    { id: 'joker', name: 'Джокер', icon: '🃏', desc: 'Выбор дверей и уровней риска' },
+    { id: 'alchemist', name: 'Алхимик', icon: '⚗️', desc: 'Ингредиенты и способы варки' },
+    { id: 'blackjack', name: '21', icon: '🂡', desc: 'Карты против дилера' },
+    { id: 'ruby_roulette', name: 'Рулетка', icon: '🎰', desc: 'Игра на рубины' },
+];
+const HISTORY_FILTERS = [['all', 'Все'], ['games', 'Игры'], ['bonuses', 'Бонусы'],
+    ['transfers', 'Переводы'], ['shop', 'Магазин'], ['referrals', 'Рефералы']];
+const TX_LABELS = { bonus: 'Бонус', daily: 'Ежедневный бонус', weekly: 'Недельный бонус',
+    game_bet: 'Ставка', game_win: 'Выигрыш', transfer: 'Перевод', transfer_in: 'Перевод',
+    transfer_out: 'Перевод', shop: 'Покупка', referral: 'Реферальный бонус', promo: 'Промокод' };
+
+function botUrl(profile, action = '') {
+    return 'https://t.me/' + (profile?.bot_username || 'tonbotgram_bot') + (action ? '?start=' + encodeURIComponent(action) : '');
+}
+
+function useResource(path) {
+    const [data, setData] = useState(null);
+    const [error, setError] = useState('');
+    const [revision, setRevision] = useState(0);
+    useEffect(() => {
+        const controller = new AbortController();
+        setData(null); setError('');
+        api(path, { signal: controller.signal }).then(value => {
+            if (!controller.signal.aborted) setData(value);
+        }).catch(error => {
+            if (error.name !== 'AbortError') setError('Не удалось загрузить данные. Проверьте соединение.');
+        });
+        return () => controller.abort();
+    }, [path, revision]);
+    return { data, error, reload: () => setRevision(value => value + 1) };
+}
+
+function ResourceState({ resource }) {
+    if (resource.error) return <div className="card request-error" role="status">
+        <p>{resource.error}</p><button className="btn btn-secondary" onClick={resource.reload}>Повторить</button>
+    </div>;
+    if (!resource.data) return <div className="card skeleton-card" role="status" aria-label="Загрузка данных">
+        <div className="skeleton-line" /><div className="skeleton-line short" /><div className="skeleton-line" />
+    </div>;
+    return null;
+}
+
+function DashboardPage({ profile, photoUrl, onNavigate }) {
+    const resource = useResource('/hub');
+    const hub = resource.data;
+    const available = hub ? Number(hub.bonuses.daily.available) + Number(hub.bonuses.weekly.available) : null;
+    const prefs = profile.preferences || {};
+    return <div className="page dashboard-page">
+        <div className="page-intro"><span>ВАШ ИГРОВОЙ КЛУБ</span><span>✦ TON CASINO</span></div>
+        <div className="profile-header dashboard-hero">
+            <FrameAvatar frame={profile.active_frame} photoUrl={photoUrl} initials={(profile.first_name || 'И')[0].toUpperCase()} />
+            <div className="profile-info"><span className="eyebrow">С возвращением</span>
+                <h2>{profile.first_name || 'Игрок'}</h2><span className="muted">Уровень {calcLevel(profile.xp).level} · {formatNumber(profile.xp)} XP</span>
+            </div>
+            <button className="icon-button" aria-label="Настройки профиля" onClick={() => onNavigate('profile')}>⚙</button>
+        </div>
+        <div className="wallet-hero card">
+            <span className="eyebrow">ВАШ БАЛАНС</span><strong>{formatNumber(profile.balance)} <small>TON</small></strong>
+            <div className="wallet-footer"><span>💎 {formatNumber(profile.rubies)} рубинов</span>
+                <button onClick={() => onNavigate('history')}>История ↗</button></div>
+        </div>
+        {hub?.active_game && <div className="card resume-card"><div><span className="eyebrow">НЕЗАВЕРШЁННАЯ ИГРА</span>
+            <strong>{hub.active_game.name}</strong></div>
+            {hub.active_game.type === 'mines' ? <button className="btn btn-primary" onClick={() => onNavigate('games')}>Продолжить</button>
+                : <a className="btn btn-primary" href={botUrl(profile, 'resume')}>Продолжить в боте</a>}
+        </div>}
+        <button className="bonus-banner" onClick={() => onNavigate('bonuses')}>
+            <span className="bonus-banner-icon">🎁</span><span><strong>{available === null ? 'Ваши бонусы' : available ? 'Доступно бонусов: ' + available : 'Бонусы получены'}</strong>
+                <small>Ежедневный и недельный в одном месте</small></span><span>→</span>
+        </button>
+        <div className="quick-grid">
+            {[['games', '🎮', 'Играть'], ['shop', '🛒', 'Магазин'], ['statistics', '📈', 'Статистика'], ['leaderboard', '🏆', 'Рейтинг']].map(item =>
+                <button key={item[0]} onClick={() => onNavigate(item[0])}><span>{item[1]}</span>{item[2]}</button>)}
+        </div>
+        <div className="section-heading"><h3>Ваши игры</h3><span>⭐ {prefs.favorites?.length || 0} в избранном</span></div>
+        <div className="game-catalog">{GAME_CATALOG.filter(game => !prefs.favorites?.length || prefs.favorites.includes(game.id)).map(game =>
+            game.id === 'mines' || game.id === 'coinflip'
+                ? <button key={game.id} onClick={() => onNavigate(game.id === 'coinflip' ? 'coinflip' : 'games')}><span>{game.icon}</span><strong>{game.name}</strong><small>{game.desc}</small></button>
+                : <a key={game.id} href={botUrl(profile, 'play_' + game.id)}><span>{game.icon}</span><strong>{game.name}</strong><small>Открыть в Telegram</small></a>)}</div>
+        <ResourceState resource={resource} />
+    </div>;
+}
+
+function BonusesPage({ refreshProfile }) {
+    const resource = useResource('/bonuses');
+    const [busy, setBusy] = useState('');
+    const [notice, setNotice] = useState('');
+    const [error, setError] = useState('');
+    const claim = async kind => {
+        if (busy) return;
+        setBusy(kind); setNotice(''); setError('');
+        try {
+            const result = await api('/bonuses/claim', { method: 'POST', body: JSON.stringify({ kind }) });
+            setNotice(result.claimed ? 'Получено ' + formatNumber(result.amount) + ' TON' : 'Этот бонус уже получен');
+            await refreshProfile(); resource.reload();
+        } catch { setError('Не удалось получить бонус. Попробуйте снова.'); }
+        finally { setBusy(''); }
+    };
+    const reminder = async (kind, enabled) => {
+        if (busy) return;
+        setBusy('reminder'); setError('');
+        try { await api('/bonuses/reminders', { method: 'PATCH', body: JSON.stringify({ [kind]: enabled }) }); resource.reload(); }
+        catch { setError('Не удалось сохранить напоминание.'); }
+        finally { setBusy(''); }
+    };
+    return <div className="page"><div className="section-title">Ваши бонусы <span>Каждый день и каждую неделю</span></div>
+        <ResourceState resource={resource} />
+        {notice && <p className="inline-success" role="status">{notice}</p>}
+        {error && <p className="inline-error" role="alert">{error}</p>}
+        {resource.data && ['daily', 'weekly'].map(kind => {
+            const bonus = resource.data[kind];
+            return <div className="card bonus-card" key={kind}><div className="bonus-heading">
+                <span className="bonus-icon">{kind === 'daily' ? '☀️' : '🗓️'}</span>
+                <div><h3>{kind === 'daily' ? 'Ежедневный бонус' : 'Недельный бонус'}</h3>
+                    <span className={'status-pill ' + (bonus.available ? 'ready' : '')}>{bonus.available ? 'Доступен' : 'Получен'}</span></div></div>
+                <strong className="bonus-amount">{formatNumber(bonus.amount)} <small>TON</small></strong>
+                <button className="btn btn-primary" disabled={Boolean(busy) || !bonus.available} onClick={() => claim(kind)}>
+                    {busy === kind ? 'Получаем…' : bonus.available ? 'Забрать бонус' : 'Уже получен'}</button>
+                {!bonus.available && <p className="muted">Следующий: {new Date(bonus.next_at).toLocaleString('ru-RU')}</p>}
+                <label className="switch-row"><span>Напоминать в Telegram</span><input type="checkbox" checked={bonus.reminder_enabled}
+                    disabled={Boolean(busy)} onChange={event => reminder(kind, event.target.checked)} /></label>
+            </div>;
+        })}
+        <p className="page-note">Бонусы и напоминания синхронизируются с ботом. Обновление — в полночь и в понедельник по времени сервера.</p>
+    </div>;
+}
+
+function HistoryPage({ profile }) {
+    const [category, setCategory] = useState('all');
+    const [page, setPage] = useState(0);
+    const [anchor, setAnchor] = useState(null);
+    const [exporting, setExporting] = useState(false);
+    const [exportError, setExportError] = useState('');
+    const resource = useResource('/history?category=' + category + '&page=' + page + (anchor === null ? '' : '&anchor=' + anchor));
+    const view = resource.data;
+    const changeFilter = value => { setCategory(value); setPage(0); };
+    const changePage = value => { setAnchor(view.anchor); setPage(value); };
+    const download = async () => {
+        if (IS_ANDROID_SHELL) { window.location.href = botUrl(profile, 'history_export'); return; }
+        setExporting(true); setExportError('');
+        try {
+            const response = await fetch(API_BASE + '/history/export', { headers: { Authorization: 'Bearer ' + localStorage.getItem('webapp_token') }, cache: 'no-store' });
+            if (!response.ok) throw new Error('Export failed');
+            const url = URL.createObjectURL(await response.blob());
+            const link = document.createElement('a'); link.href = url; link.download = 'ton-history.csv'; link.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch { setExportError('Не удалось выгрузить историю.'); }
+        finally { setExporting(false); }
+    };
+    return <div className="page"><div className="section-title">История <span>Все изменения баланса</span></div>
+        <div className="filter-scroll" role="group" aria-label="Фильтр истории">{HISTORY_FILTERS.map(([id, label]) =>
+            <button key={id} className={category === id ? 'selected' : ''} onClick={() => changeFilter(id)}>{label}</button>)}</div>
+        <div className="history-toolbar"><button onClick={() => { setPage(0); setAnchor(null); resource.reload(); }}>↻ Обновить</button>
+            <button disabled={exporting} onClick={download}>{exporting ? 'Готовим…' : IS_ANDROID_SHELL ? 'CSV в Telegram' : 'Экспорт CSV'}</button></div>
+        <ResourceState resource={resource} />
+        {view && <div className="card transaction-list">{!view.transactions.length
+            ? <div className="empty-state"><span>↗</span><h3>Здесь пока пусто</h3><p>Операции появятся после бонуса, игры или покупки.</p></div>
+            : view.transactions.map(tx => <div className="transaction-row" key={tx.id}>
+                <span className={'transaction-icon ' + (tx.amount >= 0 ? 'positive' : '')}>{tx.amount >= 0 ? '↙' : '↗'}</span>
+                <div><strong>{tx.type === 'game_bet' && tx.amount > 0 ? 'Возврат ставки' : TX_LABELS[tx.type] || tx.type}</strong>
+                    <p>{tx.description}</p><small>{tx.created_at}</small></div>
+                <strong className={tx.amount >= 0 ? 'positive' : 'negative'}>{tx.amount > 0 ? '+' : ''}{formatNumber(tx.amount)}<small> TON</small></strong>
+            </div>)}</div>}
+        {view && <div className="pagination"><button disabled={view.page === 0} onClick={() => changePage(view.page - 1)}>← Назад</button>
+            <span>{view.page + 1} / {view.pages} · {view.total} операций</span>
+            <button disabled={view.page + 1 >= view.pages} onClick={() => changePage(view.page + 1)}>Далее →</button></div>}
+        {exportError && <p className="inline-error" role="alert">{exportError}</p>}
+        <p className="page-note">CSV содержит до 1000 последних операций.</p>
+    </div>;
+}
+
+function StatisticsPage() {
+    const [days, setDays] = useState(30);
+    const resource = useResource('/statistics?days=' + days);
+    const data = resource.data;
+    const points = data?.points || [];
+    const values = points.map(point => point.balance);
+    const low = Math.min(...values), high = Math.max(...values);
+    const coords = points.map((point, index) => (12 + index / Math.max(1, points.length - 1) * 316) + ',' + (145 - (point.balance - low) / Math.max(1, high - low) * 120)).join(' ');
+    return <div className="page"><div className="section-title">Статистика <span>Ваши результаты и баланс</span></div>
+        <div className="filter-scroll" aria-label="Период статистики">{[7, 30, 90].map(value =>
+            <button key={value} className={days === value ? 'selected' : ''} onClick={() => setDays(value)}>{value} дней</button>)}</div>
+        <ResourceState resource={resource} />
+        {data && <><div className="card balance-chart"><div className="section-heading"><h3>Баланс</h3><button onClick={resource.reload}>↻ Обновить</button></div>
+            <strong>{formatNumber(points[points.length - 1]?.balance)} <small>TON</small></strong>
+            <svg viewBox="0 0 340 168" role="img" aria-label={'График баланса за ' + days + ' дней'}>
+                <line x1="12" y1="145" x2="328" y2="145" stroke="var(--border)" />
+                <polyline points={coords} fill="none" stroke="var(--green)" strokeWidth="3" strokeLinejoin="round" />
+                {points.map((point, index) => <circle key={point.day} cx={12 + index / Math.max(1, points.length - 1) * 316}
+                    cy={145 - (point.balance - low) / Math.max(1, high - low) * 120} r="3" fill="var(--green)">
+                    <title>{point.day + ': ' + formatNumber(point.balance) + ' TON'}</title></circle>)}
+            </svg><div className="chart-labels"><span>{points[0]?.day}</span><span>{points[points.length - 1]?.day}</span></div></div>
+            <div className="metric-grid">{[['Игр', data.summary.games], ['Побед', data.summary.wins],
+                ['Доля побед', data.summary.winrate + '%'], ['Результат игр', (data.summary.net > 0 ? '+' : '') + formatNumber(data.summary.net) + ' TON']].map(([label, value]) =>
+                    <div className="card" key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>
+            <div className="card"><h3>По играм</h3>{data.games.length ? data.games.map(game => <div className="game-stats-row" key={game.game_type}>
+                <div><strong>{GAME_CATALOG.find(item => item.id === game.game_type)?.name || game.game_type}</strong><small>{game.games} игр · {game.wins} побед</small></div>
+                <strong className={game.payouts - game.bets >= 0 ? 'positive' : 'negative'}>{formatNumber(game.payouts - game.bets)} TON</strong>
+            </div>) : <p className="muted">За выбранный период ещё нет завершённых игр.</p>}</div>
+            <p className="page-note">Результат игр — выплаты минус ставки. График учитывает бонусы, покупки и переводы.</p></>}
+    </div>;
+}
+
+function ProfileSettingsCard({ profile, refreshProfile }) {
+    const prefs = profile.preferences || {};
+    const [bio, setBio] = useState(prefs.bio || '');
+    const [bet, setBet] = useState(String(prefs.saved_bet || 100));
+    const [busy, setBusy] = useState(false);
+    const [notice, setNotice] = useState('');
+    const [error, setError] = useState('');
+    const [nativeSettings, setNativeSettings] = useState(window.__tonNativeSettings || {});
+    useEffect(() => { setBio(prefs.bio || ''); setBet(String(prefs.saved_bet || 100)); }, [prefs.bio, prefs.saved_bet]);
+    useEffect(() => {
+        const handler = event => setNativeSettings(event.detail || {});
+        window.addEventListener('ton-native-settings', handler);
+        return () => window.removeEventListener('ton-native-settings', handler);
+    }, []);
+    const change = async values => {
+        if (busy) return;
+        setBusy(true); setError(''); setNotice('');
+        try { await api('/preferences', { method: 'PATCH', body: JSON.stringify(values) }); await refreshProfile(); setNotice('Настройки сохранены'); }
+        catch { setError('Не удалось сохранить. Проверьте описание и размер ставки.'); }
+        finally { setBusy(false); }
+    };
+    const upload = async file => {
+        if (!file) return;
+        if (file.size > 2 * 1024 * 1024) { setError('Выберите изображение до 2 МиБ.'); return; }
+        setBusy(true); setError(''); setNotice('');
+        try {
+            await api('/profile/avatar', { method: 'PUT', body: file, headers: { 'Content-Type': file.type || 'application/octet-stream' } });
+            await refreshProfile(); setNotice('Аватар сохранён');
+        } catch { setError('Не удалось загрузить. Поддерживаются JPEG, PNG, GIF и WebP до 2 МиБ.'); }
+        finally { setBusy(false); }
+    };
+    const reset = async () => {
+        setBusy(true); setError('');
+        try { await api('/profile/avatar', { method: 'DELETE' }); await refreshProfile(); setNotice('Используется фото Telegram'); }
+        catch { setError('Не удалось сбросить аватар.'); }
+        finally { setBusy(false); }
+    };
+    const favorite = async (game_id, enabled) => {
+        setBusy(true); setError('');
+        try { await api('/favorites', { method: 'PUT', body: JSON.stringify({ game_id, enabled }) }); await refreshProfile(); }
+        catch { setError('Не удалось сохранить избранное.'); }
+        finally { setBusy(false); }
+    };
+    return <div className="card profile-settings"><div className="card-title">Настройки профиля <span>ВАШ СТИЛЬ</span></div>
+        <div className="settings-field"><strong>Фото или GIF</strong><p>Аватар будет общим для бота и приложения. До 2 МиБ.</p>
+            {HAS_NATIVE_UPDATES && !HAS_NATIVE_SECURITY ? <button className="btn btn-secondary" onClick={() => { window.location.href = 'toncasino://check-update'; }}>Обновить приложение для выбора файла</button>
+                : <label className={'btn btn-secondary upload-button' + (busy ? ' disabled' : '')}>Загрузить фото / GIF
+                    <input type="file" accept="image/jpeg,image/png,image/gif,image/webp" disabled={busy}
+                        onChange={event => { upload(event.target.files?.[0]); event.target.value = ''; }} /></label>}
+            {prefs.custom_avatar && <button className="text-button" disabled={busy} onClick={reset}>Вернуть фото Telegram</button>}
+        </div>
+        <label className="settings-field"><strong>Описание</strong><textarea maxLength="200" value={bio} onChange={event => setBio(event.target.value)}
+            placeholder="Расскажите немного о себе" /><small>{bio.length}/200</small></label>
+        <label className="settings-field"><strong>Сохранённая ставка, TON</strong>
+            <input type="number" min="1" max={profile.max_bet || 250000} value={bet} onChange={event => setBet(event.target.value)} /></label>
+        <button className="btn btn-primary" disabled={busy} onClick={() => change({ bio, saved_bet: Number(bet) })}>Сохранить профиль</button>
+        <div className="settings-field"><strong>Тема оформления</strong><div className="theme-picker">
+            {['dark', 'light'].map(theme => <button key={theme} className={(prefs.theme || 'dark') === theme ? 'selected' : ''} disabled={busy}
+                onClick={() => change({ theme })}>{theme === 'dark' ? '☾ Тёмная' : '☀ Светлая'}</button>)}</div></div>
+        <label className="switch-row"><span>Скрыть себя в рейтингах</span><input type="checkbox" checked={Boolean(prefs.hide_stats)} disabled={busy}
+            onChange={event => change({ hide_stats: event.target.checked })} /></label>
+        <div className="settings-field"><strong>Избранные игры</strong><div className="favorite-picker">{GAME_CATALOG.map(game =>
+            <button key={game.id} aria-pressed={prefs.favorites?.includes(game.id) || false} disabled={busy}
+                onClick={() => favorite(game.id, !prefs.favorites?.includes(game.id))}>
+                {prefs.favorites?.includes(game.id) ? '★' : '☆'} {game.icon} {game.name}</button>)}</div></div>
+        {HAS_NATIVE_SECURITY && <div className="settings-field"><strong>Защита входа на этом телефоне</strong>
+            <p>Подтверждение системным PIN-кодом, отпечатком или лицом после возвращения в приложение.</p>
+            <button className="btn btn-secondary" onClick={() => { window.location.href = 'toncasino://device-lock'; }}>
+                {nativeSettings.device_lock ? 'Отключить защиту входа' : 'Включить защиту входа'}</button></div>}
+        {notice && <p className="inline-success" role="status">{notice}</p>}{error && <p className="inline-error" role="alert">{error}</p>}
+    </div>;
+}
+
+function CoinflipPage({ profile, refreshProfile }) {
+    const key = 'coinflip-pending:' + profile.user_id;
+    const [pending, setPending] = useState(() => {
+        try { return JSON.parse(sessionStorage.getItem(key)) || null; } catch { return null; }
+    });
+    const [bet, setBet] = useState(String(profile.preferences?.saved_bet || 100));
+    const [result, setResult] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState('');
+    const play = async choice => {
+        if (busy) return;
+        const bytes = crypto.getRandomValues(new Uint8Array(16));
+        const request = pending || { request_id: Array.from(bytes).map(value => value.toString(16).padStart(2, '0')).join(''), bet: Number(bet), choice };
+        setPending(request); sessionStorage.setItem(key, JSON.stringify(request)); setBusy(true); setError('');
+        try {
+            const data = await api('/coinflip', { method: 'POST', body: JSON.stringify(request) });
+            setResult(data.round); setPending(null); sessionStorage.removeItem(key); await refreshProfile();
+        } catch (error) {
+            if (error.status && error.status < 500) { setPending(null); sessionStorage.removeItem(key); }
+            setError(error.status === 402 ? 'Недостаточно TON для этой ставки.' : error.status === 409 ? 'Сначала завершите текущую игру.' :
+                error.status === 400 ? 'Введите целую ставку в допустимом диапазоне.' : 'Ответ не получен. Повторите запрос, чтобы узнать результат этой игры.');
+        } finally { setBusy(false); }
+    };
+    return <div className="page coinflip-page"><div className="section-title">Монетка <span>Орёл или решка · ×1,85</span></div>
+        <div className="card coinflip-card"><div className={'coin-visual' + (busy ? ' tossing' : '')}>{result ? result.result === 'орёл' ? '✦' : '◆' : '✦'}</div>
+            <p className="muted">Ставка списывается при выборе стороны.</p>
+            <label className="settings-field"><strong>Ставка, TON</strong><input aria-label="Ставка в Монетке" type="number" min="1"
+                max={profile.max_bet || 250000} value={pending ? pending.bet : bet} disabled={busy || Boolean(pending)} onChange={event => setBet(event.target.value)} /></label>
+            <div className="coin-choices">{['орёл', 'решка'].map(choice => <button className="btn btn-primary" key={choice}
+                disabled={busy || Boolean(pending)} onClick={() => play(choice)}>{choice === 'орёл' ? 'Орёл' : 'Решка'}</button>)}</div>
+            {pending && !busy && <button className="btn btn-secondary" onClick={() => play(pending.choice)}>Узнать результат · повторить запрос</button>}
+            {busy && <p role="status">Получаем результат…</p>}
+            {result && !busy && <div className={'coin-result ' + (result.won ? 'positive' : 'negative')} role="status">
+                <h3>Выпало: {result.result}</h3><p>{result.won ? 'Выплата ' + formatNumber(result.payout) + ' TON' : 'Ставка ' + formatNumber(result.bet) + ' TON проиграна'}</p>
+            </div>}{error && <p className="inline-error" role="alert">{error}</p>}
+        </div>
+        <p className="page-note">Повтор запроса возвращает результат той же игры и не списывает ставку снова.</p>
+    </div>;
+}
+
+function MorePage({ profile, onNavigate }) {
+    return <div className="page"><div className="section-title">Ваш клуб <span>Всё в одном месте</span></div>
+        <div className="more-grid">{[['shop', '🛒', 'Магазин', 'Рамки и титулы'], ['leaderboard', '🏆', 'Рейтинг', 'Неделя, месяц и всё время'],
+            ['statistics', '📈', 'Статистика', 'График и результаты'], ['ref', '👥', 'Рефералы', 'Приглашения и награды']].map(item =>
+                <button className="card" key={item[0]} onClick={() => onNavigate(item[0])}><span>{item[1]}</span><strong>{item[2]}</strong><small>{item[3]}</small></button>)}</div>
+        <div className="card faq-card"><h3>Помощь</h3>
+            <details><summary>Как получить бонусы?</summary><p>Откройте раздел «Бонусы». Получение в боте и приложении общее: каждый бонус начисляется один раз за период.</p></details>
+            <details><summary>Как поставить GIF на аватар?</summary><p>Откройте профиль и загрузите GIF до 2 МиБ. В боте используйте /avatar и отправьте GIF как файл без сжатия.</p></details>
+            <details><summary>Как отключить потерянный телефон?</summary><p>В профиле откройте «Подключённые устройства» или отправьте /devices боту. Завершите вход на нужном устройстве.</p></details>
+            <a className="btn btn-secondary" href={botUrl(profile, 'help')}>Открыть помощь в Telegram</a>
+        </div></div>;
 }
 
 function DevicesCard() {
@@ -438,14 +773,15 @@ function ProfilePage({ profile, refreshProfile, photoUrl }) {
                     </div>
                 )}
             </div>
+            <ProfileSettingsCard profile={profile} refreshProfile={refreshProfile} />
             <DevicesCard />
         </div>
     );
 }
 
-function GamesPage({ profile, refreshProfile }) {
+function GamesPage({ profile, refreshProfile, onNavigate }) {
     const [mineCount, setMineCount] = useState(3);
-    const [bet, setBet] = useState('100');
+    const [bet, setBet] = useState(String(profile?.preferences?.saved_bet || 100));
     const [round, setRound] = useState(null);
     const [balance, setBalance] = useState(profile?.balance ?? 0);
     const [maxBet, setMaxBet] = useState(250000);
@@ -570,6 +906,7 @@ function GamesPage({ profile, refreshProfile }) {
     if (round?.status === 'cancelled') statusText = 'Раунд отменён до первого хода. Ставка возвращена.';
     return (
         <div className="page games-page">
+            <GameTabs page="games" onNavigate={onNavigate} />
             <div className="page-intro"><span>ИГРОВАЯ ЗОНА</span><span className="page-intro-mark">01 / 04</span></div>
             <div className="section-title">Игры <span>Выберите свой риск</span></div>
             <div className="mines-demo card">
@@ -900,95 +1237,38 @@ function ReferralPage({ profile }) {
     );
 }
 
+function GameTabs({ page, onNavigate }) {
+    return <div className="game-tabs" aria-label="Выбор игры">
+        <button className={page === 'games' ? 'selected' : ''} onClick={() => onNavigate('games')}>💣 Мины</button>
+        <button className={page === 'coinflip' ? 'selected' : ''} onClick={() => onNavigate('coinflip')}>🪙 Монетка</button>
+    </div>;
+}
+
 function LeaderboardPage({ profile }) {
     const [tab, setTab] = useState('balance');
-    const [data, setData] = useState(null);
-
-    useEffect(() => {
-        setData(null);
-        api(`/leaderboard?mode=${tab}&limit=20`).then(setData).catch(() => {});
-    }, [tab]);
-
-    const medals = ['🥇', '🥈', '🥉'];
-    const tabs = [
-        { id: 'balance', label: '💰 Баланс' },
-        { id: 'wins', label: '🏆 Победы' },
-        { id: 'xp', label: '📊 Опыт' },
-    ];
-
-    return (
-        <div className="page leaderboard-page">
-            <div className="page-intro"><span>ЛИДЕРЫ</span><span className="page-intro-mark">ТОП 20</span></div>
-            <div className="section-title">Рейтинг <span>Лучшие игроки клуба</span></div>
-            <div className="leaderboard-tabs">
-                {tabs.map(t => (
-                    <button
-                        key={t.id}
-                        className={`btn btn-small ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}
-                        onClick={() => setTab(t.id)}
-                    >
-                        {t.label}
-                    </button>
-                ))}
-            </div>
-            {!data ? <Loading /> : (
-                <>
-                    {data.my_rank && (
-                        <div className="card my-rank">
-                            <span>ВАША ПОЗИЦИЯ</span>
-                            <strong>#{data.my_rank}</strong>
-                        </div>
-                    )}
-                    <div className="card leaderboard-list">
-                        {data.players.length === 0 ? (
-                            <p style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '20px 0' }}>
-                                Пока нет данных
-                            </p>
-                        ) : data.players.map(p => (
-                            <div key={p.user_id} className={`leaderboard-player${p.is_me ? ' is-me' : ''}`}>
-                                <div style={{
-                                    width: '28px',
-                                    textAlign: 'center',
-                                    fontSize: p.rank <= 3 ? '20px' : '15px',
-                                    fontWeight: 700,
-                                    color: p.rank <= 3 ? 'var(--gold)' : 'var(--text-dim)',
-                                }}>
-                                    {p.rank <= 3 ? medals[p.rank - 1] : p.rank}
-                                </div>
-                                <div className="avatar leaderboard-avatar">
-                                    {(p.first_name || 'K')[0].toUpperCase()}
-                                </div>
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                    <div style={{ fontSize: '14px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                        {p.first_name || 'Игрок'}
-                                        {p.username && <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}> @{p.username}</span>}
-                                    </div>
-                                </div>
-                                <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                                    {tab === 'balance' ? (
-                                        <>
-                                            <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--gold)' }}>{formatNumber(p.max_balance)}</div>
-                                            <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>TON</div>
-                                        </>
-                                    ) : tab === 'xp' ? (
-                                        <>
-                                            <div style={{ fontSize: '15px', fontWeight: 700, color: '#b478ff' }}>{formatNumber(p.xp || 0)}</div>
-                                            <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>XP</div>
-                                        </>
-                                    ) : (
-                                        <>
-                                            <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--green)' }}>{formatNumber(p.wins)}</div>
-                                            <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>{p.total_games} игр</div>
-                                        </>
-                                    )}
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </>
-            )}
-        </div>
-    );
+    const [period, setPeriod] = useState('all');
+    const resource = useResource('/leaderboard?mode=' + tab + '&period=' + period + '&limit=20');
+    const data = resource.data;
+    const changePeriod = value => { setPeriod(value); if (value !== 'all') setTab('wins'); };
+    return <div className="page leaderboard-page">
+        <div className="section-title">Рейтинг <span>Ваше место в клубе</span></div>
+        <div className="filter-scroll" aria-label="Период рейтинга">{[['all', 'Всё время'], ['week', 'Неделя'], ['month', 'Месяц']].map(([id, label]) =>
+            <button key={id} className={period === id ? 'selected' : ''} onClick={() => changePeriod(id)}>{label}</button>)}</div>
+        <div className="leaderboard-tabs">{(period === 'all' ? [['balance', 'Максимум TON'], ['wins', 'Победы'], ['xp', 'Опыт']] :
+            [['wins', 'Победы'], ['games', 'Игры']]).map(([id, label]) =>
+                <button className={'btn btn-small ' + (tab === id ? 'btn-primary' : 'btn-secondary')} key={id} onClick={() => setTab(id)}>{label}</button>)}</div>
+        <ResourceState resource={resource} />
+        {data && <>{data.my_rank && <div className="card my-rank"><span>ВАША ПОЗИЦИЯ</span><strong>#{data.my_rank}</strong></div>}
+            {profile.preferences?.hide_stats && <p className="page-note">Вы скрыты в рейтингах. Видимость можно изменить в профиле.</p>}
+            <div className="card leaderboard-list">{data.players.length ? data.players.map(player =>
+                <div className={'leaderboard-player' + (player.is_me ? ' is-me' : '')} key={player.user_id}>
+                    <span className="rank-number">{player.rank <= 3 ? ['🥇', '🥈', '🥉'][player.rank - 1] : player.rank}</span>
+                    <div className="leader-name"><strong>{player.first_name || 'Игрок'}</strong>
+                        <small>{player.is_me ? 'Это вы' : player.username ? '@' + player.username : 'Участник клуба'}</small></div>
+                    <strong>{formatNumber(player.score)} <small>{tab === 'balance' ? 'TON' : tab === 'xp' ? 'XP' : tab === 'games' ? 'игр' : 'побед'}</small></strong>
+                </div>) : <div className="empty-state"><span>🏆</span><h3>Рейтинг ещё пуст</h3><p>Завершённые игры появятся здесь.</p></div>}</div>
+        </>}
+    </div>;
 }
 
 function AuthScreen({ onAuth }) {
@@ -1202,10 +1482,15 @@ function useAvatar(userId, refreshKey) {
 function App() {
     const [user, setUser] = useState(null);
     const [profile, setProfile] = useState(null);
-    const [page, setPage] = useState('profile');
+    const [page, setPage] = useState('home');
     const [loading, setLoading] = useState(true);
     const [avatarRefresh, setAvatarRefresh] = useState(0);
     const photoUrl = useAvatar(user?.user_id, avatarRefresh);
+    useEffect(() => {
+        const theme = profile?.preferences?.theme || 'dark';
+        document.body.dataset.theme = theme;
+        localStorage.setItem('ton-theme', theme);
+    }, [profile?.preferences?.theme]);
 
     const refreshProfile = useCallback(() => {
         if (!user) return;
@@ -1241,6 +1526,7 @@ function App() {
         const resetAuth = () => {
             setUser(null);
             setProfile(null);
+            setPage('home');
         };
         window.addEventListener('webapp-auth-expired', resetAuth);
         return () => window.removeEventListener('webapp-auth-expired', resetAuth);
@@ -1293,8 +1579,14 @@ function App() {
                 <div className="header-spark" aria-hidden="true">✧</div>
             </div>
 
+            {page === 'home' && <DashboardPage profile={profile} photoUrl={photoUrl} onNavigate={setPage} />}
+            {page === 'bonuses' && <BonusesPage refreshProfile={refreshProfile} />}
+            {page === 'history' && <HistoryPage profile={profile} />}
+            {page === 'statistics' && <StatisticsPage />}
+            {page === 'coinflip' && <><GameTabs page="coinflip" onNavigate={setPage} /><CoinflipPage profile={profile} refreshProfile={refreshProfile} /></>}
+            {page === 'more' && <MorePage profile={profile} onNavigate={setPage} />}
             {page === 'profile' && <ProfilePage profile={profile} refreshProfile={refreshProfile} photoUrl={photoUrl} />}
-            {page === 'games' && <GamesPage profile={profile} refreshProfile={refreshProfile} />}
+            {page === 'games' && <GamesPage profile={profile} refreshProfile={refreshProfile} onNavigate={setPage} />}
             {page === 'shop' && <ShopPage profile={profile} refreshProfile={refreshProfile} photoUrl={photoUrl} />}
             {page === 'ref' && <ReferralPage profile={profile} />}
             {page === 'leaderboard' && <LeaderboardPage profile={profile} />}

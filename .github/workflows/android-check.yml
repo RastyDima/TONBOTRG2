@@ -1,0 +1,26 @@
+name: Android compile check
+
+on:
+  pull_request:
+    paths: ['android/**', '.github/workflows/android-check.yml']
+  push:
+    branches: ['codex/**']
+    paths: ['android/**', '.github/workflows/android-check.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - run: bash gradlew --no-daemon assembleDebug lintDebug
+        working-directory: android

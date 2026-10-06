@@ -95,7 +95,10 @@ def level_name(level: int) -> str:
     return name
 
 
-class Database:
+from utils.player_data import PlayerFeaturesMixin
+
+
+class Database(PlayerFeaturesMixin):
     """Слой работы с SQLite (локальная разработка без Postgres)."""
 
     def __init__(self, path: str = DATABASE_PATH):
@@ -257,6 +260,8 @@ class Database:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS mobile_sessions_user_idx ON mobile_sessions(user_id)")
             conn.commit()
+
+        self.init_player_tables()
 
     def create_mobile_session(self, user_id: int, device_label: str, expires_at: int) -> str:
         session_id = secrets.token_urlsafe(24)
@@ -867,6 +872,7 @@ class Database:
             )
             conn.execute("DELETE FROM transactions")
             conn.execute("DELETE FROM games")
+            conn.execute("DELETE FROM instant_rounds")
             conn.execute("DELETE FROM promo_claims")
             conn.execute("DELETE FROM user_achievements")
             conn.execute("DELETE FROM user_showcase")
@@ -999,7 +1005,7 @@ class Database:
             return row["xp"] if row else 0
 
 
-class PostgresDatabase:
+class PostgresDatabase(PlayerFeaturesMixin):
     """Слой работы с PostgreSQL (для облачного хостинга)."""
 
     def __init__(self, url: str = DATABASE_URL):
@@ -1182,6 +1188,8 @@ class PostgresDatabase:
                 )
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS mobile_sessions_user_idx ON mobile_sessions(user_id)")
+
+        self.init_player_tables()
 
     def create_mobile_session(self, user_id: int, device_label: str, expires_at: int) -> str:
         session_id = secrets.token_urlsafe(24)
@@ -1789,6 +1797,7 @@ class PostgresDatabase:
             )
             cur.execute("DELETE FROM transactions")
             cur.execute("DELETE FROM games")
+            cur.execute("DELETE FROM instant_rounds")
             cur.execute("DELETE FROM promo_claims")
             cur.execute("DELETE FROM user_achievements")
             cur.execute("DELETE FROM user_showcase")
