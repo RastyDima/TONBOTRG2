@@ -7,7 +7,8 @@ body { background: radial-gradient(ellipse at 100% 0,#1c393c 0,transparent 48%),
 body[data-theme="light"] {
     --bg-dark:#edf3f2; --bg-card:#fff; --bg-section:#e6efeb; --bg-input:#f2f6f5;
     --purple:#15725d; --purple-dim:#125b4d; --purple-glow:rgba(21,114,93,.12); --green:#15725d;
-    --gold:#98610b; --red:#bf3141; --text:#19342f; --text-dim:#617671; --border:#d0ded9; --border-glow:#9fc7b7;
+    --gold:#98610b; --red:#bf3141; --pink:#b52c64; --cyan:#216785;
+    --text:#19342f; --text-dim:#617671; --border:#d0ded9; --border-glow:#9fc7b7;
     background:radial-gradient(ellipse at 100% 0,#d6ebe3 0,transparent 50%),var(--bg-dark);
 }
 body[data-theme="light"] .card, body[data-theme="light"] .profile-header,
@@ -18,6 +19,26 @@ body[data-theme="light"] .leaderboard-player.is-me, body[data-theme="light"] .sh
 body[data-theme="light"] .shop-wallet, body[data-theme="light"] .mines-info { background:var(--bg-section); }
 body[data-theme="light"] .frame-avatar-core { background:#dbe6e1; color:#315449; }
 body[data-theme="light"] .header h1 { color:var(--text); }
+body[data-theme="light"] .card-title { color:var(--text); }
+body[data-theme="light"] .card-title span, body[data-theme="light"] .balance-label,
+body[data-theme="light"] .balance-unit, body[data-theme="light"] .stat-label,
+body[data-theme="light"] .profile-id, body[data-theme="light"] .profile-progress-caption,
+body[data-theme="light"] .devices-caption, body[data-theme="light"] .devices-muted,
+body[data-theme="light"] .device-info small { color:var(--text-dim); }
+body[data-theme="light"] .page-intro { color:var(--purple); }
+body[data-theme="light"] .nav-item.active { background:var(--purple); color:white; }
+body[data-theme="light"] .category-switch, body[data-theme="light"] .leaderboard-tabs,
+body[data-theme="light"] .ref-link, body[data-theme="light"] .toast,
+body[data-theme="light"] .mines-demo-settings, body[data-theme="light"] .profile-progress-track,
+body[data-theme="light"] .winrate-bar, body[data-theme="light"] .showcase-slot.filled,
+body[data-theme="light"] .showcase-option.selected { background:var(--bg-section); }
+body[data-theme="light"] .showcase-slot { color:var(--text); }
+body[data-theme="light"] .showcase-edit, body[data-theme="light"] .shop-card .item-equip,
+body[data-theme="light"] .ref-link, body[data-theme="light"] .my-rank strong,
+body[data-theme="light"] .device-info .device-current { color:var(--purple); }
+body[data-theme="light"] .my-rank span { color:var(--text-dim); }
+body[data-theme="light"] .category-switch button { color:var(--text-dim); }
+body[data-theme="light"] .category-switch button.active { color:white; background:var(--purple); }
 .app { max-width:600px; margin:0 auto; }
 .header { max-width:600px; }
 .page { padding-bottom:115px; }
@@ -28,6 +49,7 @@ button,input,textarea { font:inherit; }
 button,a { touch-action:manipulation; }
 button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible { outline:2px solid var(--purple); outline-offset:3px; }
 .btn-primary { background:var(--purple); color:#0c2520; border:0; }
+.btn-secondary { background:var(--bg-section); color:var(--text); }
 body[data-theme="light"] .btn-primary { color:white; }
 .btn-primary:disabled { opacity:.48; }
 .card { border:1px solid var(--border); border-radius:20px; padding:20px; }
@@ -38,8 +60,9 @@ body[data-theme="light"] .btn-primary { color:white; }
 .section-heading h3 { font-size:17px; }
 .section-heading > span { color:var(--text-dim); font-size:12px; }
 .section-heading button,.wallet-footer button,.history-toolbar button,.text-button { color:var(--purple); background:transparent; border:0; min-height:40px; padding:5px 8px; cursor:pointer; }
-.dashboard-hero { border:0; background:transparent; padding:15px 0 24px; gap:16px; }
-.dashboard-hero h2 { font-size:23px; letter-spacing:-.5px; margin:3px 0; }
+.dashboard-hero { border:0; background:transparent; padding:15px 0 24px; gap:16px; min-height:116px; }
+.dashboard-hero .profile-info { min-width:0; }
+.dashboard-hero h2 { font-size:23px; letter-spacing:-.5px; margin:3px 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .dashboard-hero .frame-avatar { width:70px; height:70px; flex-shrink:0; }
 .icon-button { background:var(--bg-card); color:var(--text); border:1px solid var(--border); border-radius:14px; width:42px; height:42px; cursor:pointer; }
 .wallet-hero { background:linear-gradient(130deg,#21473f,#172d35); padding:26px; position:relative; overflow:hidden; }

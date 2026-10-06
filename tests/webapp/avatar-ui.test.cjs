@@ -102,7 +102,7 @@ const player = () => ({ ...profile, preferences: { ...prefs, favorites: [] }, ma
 const previews = path.join(__dirname, 'screenshots');
 async function preview(page, name) {
     fs.mkdirSync(previews, { recursive: true });
-    await page.screenshot({ path: path.join(previews, name + '.png'), fullPage: true });
+    await page.screenshot({ path: path.join(previews, name + '.png'), fullPage: true, animations: 'disabled' });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true,
         name + ' must fit a 360px screen');
 }
@@ -129,7 +129,7 @@ test('daily and weekly bonuses share a page and reminders survive refresh', asyn
     await page.getByRole('button', { name: 'Забрать бонус' }).first().click();
     await page.getByText('Получено 17 TON', { exact: true }).waitFor();
     await page.getByRole('button', { name: 'Уже получен' }).waitFor();
-    await page.getByRole('checkbox').first().uncheck();
+    await page.getByRole('checkbox').first().click();
     await page.waitForFunction(() => document.querySelector('.bonus-card input')?.checked === false);
     assert.equal(claims, 1);
     assert.equal(bonuses.daily.reminder_enabled, false);
@@ -235,13 +235,13 @@ test('statistics and weekly rankings use real requested periods', async t => {
             if (url.pathname === '/app/api/leaderboard') return { json: { my_rank: 24, players: [
                 { user_id: 202, first_name: 'Иван', score: 3, rank: 1, is_me: false }] } };
         } });
-    await page.getByRole('button', { name: 'Статистика', exact: true }).click();
+    await page.locator('.quick-grid').getByRole('button', { name: 'Статистика' }).click();
     await page.getByRole('button', { name: '7 дней', exact: true }).click();
     await page.getByRole('img', { name: 'График баланса за 7 дней' }).waitFor();
     assert.ok(paths.includes('/app/api/statistics?days=7'));
     await preview(page, 'statistics-dark');
     await page.getByRole('navigation').getByRole('button', { name: 'Главная' }).click();
-    await page.getByRole('button', { name: 'Рейтинг', exact: true }).click();
+    await page.locator('.quick-grid').getByRole('button', { name: 'Рейтинг' }).click();
     await page.getByRole('button', { name: 'Неделя', exact: true }).click();
     await page.getByText('#24', { exact: true }).waitFor();
     assert.ok(paths.includes('/app/api/leaderboard?mode=wins&period=week&limit=20'));

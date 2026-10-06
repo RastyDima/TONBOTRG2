@@ -17,7 +17,6 @@ def rating_kb():
     kb.button(text="🎯 По победам", callback_data="rating_wins")
     kb.button(text="📊 По опыту", callback_data="rating_xp")
     kb.adjust(3)
-    kb.row()
     kb.button(text="🏆 Неделя", callback_data="rating_period:week")
     kb.button(text="🏆 Месяц", callback_data="rating_period:month")
     kb.adjust(3, 2)
