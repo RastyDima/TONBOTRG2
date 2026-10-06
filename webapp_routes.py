@@ -12,7 +12,7 @@ from games.mines import FIELD_SIZE, MAX_MINES, MIN_MINES, MinesGame
 from handlers.shop import SHOP_ITEMS, FRAME_BY_ID, TITLE_BY_ID, ALL_BY_ID
 from mobile_pairing import consume_pairing, create_pairing
 from utils.achievements import ACHIEVEMENTS
-from utils.avatars import AvatarUnavailable, get_avatar
+from utils.avatars import Avatar, AvatarUnavailable, get_avatar
 from utils.game_registry import cancel_game, cashout_game, lose_game, registry
 from webapp_auth import (MOBILE_SESSION_TTL, issue_session_token,
                          validate_telegram_init_data, verify_session)
@@ -24,7 +24,7 @@ WEBAPP_STATIC_DIR = Path(__file__).parent / "webapp"
 
 
 def _json_response(data, status=200):
-    return web.json_response(data, status=status)
+    return web.json_response(data, status=status, headers={"Cache-Control": "no-store"})
 
 
 async def _auth_principal(request):
@@ -344,7 +344,8 @@ def register_webapp_routes(app: web.Application) -> None:
         if not user:
             return _json_response({"error": "unauthorized"}, 401)
         try:
-            avatar = await get_avatar(user["id"])
+            custom = db.get_custom_avatar(user["id"])
+            avatar = Avatar(**custom) if custom else await get_avatar(user["id"])
         except AvatarUnavailable:
             return web.json_response({"error": "avatar temporarily unavailable"}, status=503,
                                      headers={"Cache-Control": "no-store", "Retry-After": "30"})
@@ -370,6 +371,9 @@ def register_webapp_routes(app: web.Application) -> None:
             "user_id": user["id"],
             "username": user.get("username"),
             "first_name": user.get("first_name", ""),
+            "preferences": db.get_player_preferences(user["id"]),
+            "bot_username": BOT_USERNAME,
+            "max_bet": MAX_BET,
             "balance": user.get("balance", 0),
             "rubies": user.get("rubies", 0),
             "xp": user.get("xp", 0),
@@ -521,53 +525,15 @@ def register_webapp_routes(app: web.Application) -> None:
 
     async def api_leaderboard(request):
         user = await _auth_user(request)
-        mode = request.query.get("mode", "balance")
-        limit = min(int(request.query.get("limit", 20)), 50)
-
-        if mode == "wins":
-            top = db.top_wins(limit)
-        elif mode == "xp":
-            top = db.top_xp(limit)
-        elif mode == "games":
-            top = db.top_balance(limit)
-        else:
-            top = db.top_max_balance(limit)
-
-        current_user_id = user["id"] if user else 0
-        results = []
-        for i, row in enumerate(top, 1):
-            results.append({
-                "rank": i,
-                "user_id": row["id"],
-                "username": row.get("username"),
-                "first_name": row.get("first_name", "Игрок"),
-                "balance": row.get("balance", 0),
-                "max_balance": row.get("max_balance", 0),
-                "wins": row.get("wins", 0) if "wins" in row else 0,
-                "total_games": row.get("total_games", 0) if "total_games" in row else 0,
-                "is_me": row["id"] == current_user_id,
-            })
-
-        my_rank = None
-        if user:
-            if mode == "wins":
-                all_top = db.top_wins(1000)
-            elif mode == "xp":
-                all_top = db.top_xp(1000)
-            elif mode == "games":
-                all_top = db.top_balance(1000)
-            else:
-                all_top = db.top_max_balance(1000)
-            for i, row in enumerate(all_top, 1):
-                if row["id"] == current_user_id:
-                    my_rank = i
-                    break
-
-        return _json_response({
-            "mode": mode,
-            "players": results,
-            "my_rank": my_rank,
-        })
+        if not user:
+            return _json_response({"error": "unauthorized"}, 401)
+        try:
+            data = db.player_leaderboard(user["id"], request.query.get("mode", "balance"),
+                                         request.query.get("period", "all"),
+                                         int(request.query.get("limit", "20")))
+        except (ValueError, OverflowError):
+            return _json_response({"error": "invalid leaderboard"}, 400)
+        return _json_response(data)
 
     # Register API routes
     app.router.add_post(f"{WEBAPP_API_PREFIX}/api/auth", api_auth)
@@ -589,3 +555,5 @@ def register_webapp_routes(app: web.Application) -> None:
     app.router.add_post(f"{WEBAPP_API_PREFIX}/api/shop/buy", api_shop_buy)
     app.router.add_post(f"{WEBAPP_API_PREFIX}/api/shop/equip", api_shop_equip)
     app.router.add_get(f"{WEBAPP_API_PREFIX}/api/leaderboard", api_leaderboard)
+    from webapp_experience import register_player_routes
+    register_player_routes(app, _auth_user)

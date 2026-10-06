@@ -12,7 +12,7 @@ from utils.helpers import balance_text
 from utils.profile_card import generate_profile_card
 from utils.achievement_card import generate_achievements_card
 from utils.achievements import ACHIEVEMENTS
-from utils.avatars import AvatarUnavailable, get_avatar
+from utils.avatars import Avatar, AvatarUnavailable, get_avatar
 
 router = Router()
 log = logging.getLogger(__name__)
@@ -21,6 +21,7 @@ log = logging.getLogger(__name__)
 def profile_kb():
     kb = InlineKeyboardBuilder()
     kb.button(text="🏅 Достижения", callback_data="achievements")
+    kb.button(text="⚙️ Настройки профиля", callback_data="settings")
     kb.row(back_button("menu"))
     return kb.as_markup()
 
@@ -35,7 +36,8 @@ def balance_kb():
 
 async def _get_avatar(user_id: int) -> tuple[bytes | None, bool]:
     try:
-        avatar = await get_avatar(user_id)
+        custom = db.get_custom_avatar(user_id)
+        avatar = Avatar(**custom) if custom else await get_avatar(user_id)
     except AvatarUnavailable:
         return None, False
     return (avatar.data, avatar.content_type == "image/gif") if avatar else (None, False)

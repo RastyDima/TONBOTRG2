@@ -24,6 +24,7 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.webkit.ValueCallback;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
@@ -39,6 +40,9 @@ public final class MainActivity extends Activity {
     private ConnectivityManager connectivity;
     private ConnectivityManager.NetworkCallback networkCallback;
     private UpdateManager updateManager;
+    private DeviceLockController deviceLock;
+    private ValueCallback<Uri[]> filePicker;
+    private static final int REQUEST_AVATAR = 4802;
     private boolean pageFailed;
     private Boolean lastNetworkOnline;
     private final Handler networkHandler = new Handler(Looper.getMainLooper());
@@ -149,12 +153,13 @@ public final class MainActivity extends Activity {
         retry.setOnClickListener(view -> retryPage());
         errorPanel.setVisibility(View.GONE);
         setContentView(root);
+        deviceLock = new DeviceLockController(this, root, this::publishNativeSettings);
 
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false);
-        settings.setAllowContentAccess(false);
+        settings.setAllowContentAccess(true);
         settings.setMediaPlaybackRequiresUserGesture(true);
         String model = (Build.MANUFACTURER + " " + Build.MODEL).replaceAll("[^\\p{L}\\p{N} ._-]", " ")
                 .replaceAll("\\s+", " ").trim();
@@ -173,6 +178,10 @@ public final class MainActivity extends Activity {
                 Uri target = request.getUrl();
                 if ("toncasino".equals(target.getScheme()) && "check-update".equals(target.getHost())) {
                     updateManager.checkForUpdates(true);
+                    return true;
+                }
+                if ("toncasino".equals(target.getScheme()) && "device-lock".equals(target.getHost())) {
+                    deviceLock.toggle();
                     return true;
                 }
                 if ("https".equals(target.getScheme())
@@ -207,9 +216,23 @@ public final class MainActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 loading.setVisibility(View.GONE);
                 if (!pageFailed) errorPanel.setVisibility(View.GONE);
+                publishNativeSettings();
             }
         });
-        webView.setWebChromeClient(new WebChromeClient());
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback,
+                                                       FileChooserParams params) {
+                if (filePicker != null) filePicker.onReceiveValue(null);
+                filePicker = callback;
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*")
+                        .addCategory(Intent.CATEGORY_OPENABLE)
+                        .putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"image/jpeg", "image/png", "image/gif", "image/webp"})
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                try { startActivityForResult(intent, REQUEST_AVATAR); }
+                catch (ActivityNotFoundException error) { filePicker.onReceiveValue(null); filePicker = null; }
+                return true;
+            }
+        });
         if (savedInstanceState != null) webView.restoreState(savedInstanceState);
         else if (hasInternet()) webView.loadUrl(BuildConfig.SERVER_URL + "/app/?client=android");
         else showFailure(true);
@@ -232,7 +255,8 @@ public final class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (webView.canGoBack()) webView.goBack();
+        if (deviceLock != null && deviceLock.isLocked()) finish();
+        else if (webView.canGoBack()) webView.goBack();
         else super.onBackPressed();
     }
 
@@ -240,6 +264,7 @@ public final class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         if (webView != null) webView.onResume();
+        if (deviceLock != null) deviceLock.onResume();
         if (updateManager != null) updateManager.onResume();
         if (errorPanel != null) {
             networkHandler.removeCallbacks(networkPoll);
@@ -249,6 +274,7 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        if (deviceLock != null) deviceLock.onPause();
         networkHandler.removeCallbacks(networkPoll);
         if (updateManager != null) updateManager.onPause();
         if (webView != null) webView.onPause();
@@ -257,6 +283,8 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (deviceLock != null) deviceLock.close();
+        if (filePicker != null) { filePicker.onReceiveValue(null); filePicker = null; }
         if (networkCallback != null) connectivity.unregisterNetworkCallback(networkCallback);
         if (updateManager != null) updateManager.close();
         if (webView != null) {
@@ -264,5 +292,22 @@ public final class MainActivity extends Activity {
             webView = null;
         }
         super.onDestroy();
+    }
+
+    private void publishNativeSettings() {
+        if (webView == null || deviceLock == null) return;
+        webView.evaluateJavascript("window.__tonNativeSettings={device_lock:" + deviceLock.isEnabled()
+                + "};window.dispatchEvent(new CustomEvent('ton-native-settings',{detail:window.__tonNativeSettings}));", null);
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (deviceLock != null && deviceLock.onActivityResult(requestCode, resultCode)) return;
+        if (requestCode == REQUEST_AVATAR && filePicker != null) {
+            Uri[] uris = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
+            if (uris != null) for (Uri uri : uris) if (!"content".equals(uri.getScheme())) { uris = null; break; }
+            filePicker.onReceiveValue(uris);
+            filePicker = null;
+        }
     }
 }

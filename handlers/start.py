@@ -56,15 +56,34 @@ async def cmd_start(message: Message):
             f"Выберите действие в меню:"
         )
     is_admin = user.id in ADMIN_IDS or bool(db.get_user(user.id)["is_admin"])
+    if len(args) > 1 and args[1] in ("resume", "history_export", "help"):
+        from handlers.experience import active_screen, history_export_command
+        if args[1] == "resume":
+            resume_text, markup = active_screen(user.id)
+            await message.answer(resume_text, reply_markup=markup)
+        elif args[1] == "history_export":
+            await history_export_command(message)
+        else:
+            await cmd_help(message)
+        return
+    if len(args) > 1 and args[1].startswith("play_"):
+        from utils.player_data import GAMES
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+        game_id = args[1][5:]
+        if game_id in GAMES:
+            kb = InlineKeyboardBuilder()
+            kb.button(text=GAMES[game_id]["icon"] + " Открыть " + GAMES[game_id]["name"], callback_data=game_id)
+            await message.answer("🎮 Игра в Telegram · " + GAMES[game_id]["name"], reply_markup=kb.as_markup())
+            return
     if len(args) > 1 and args[1].startswith("app_"):
         paired = claim_pairing(args[1][4:], user.id)
         await message.answer(
             "✅ Аккаунт подключён. Вернитесь в Android-приложение."
             if paired else "⌛ Код приложения устарел. Получите новый код в приложении.",
-            reply_markup=main_menu(is_admin),
+            reply_markup=main_menu(is_admin, user.id),
         )
         return
-    await message.answer(text, reply_markup=main_menu(is_admin))
+    await message.answer(text, reply_markup=main_menu(is_admin, user.id))
 
 
 @router.message(Command("connect"))
@@ -106,6 +125,14 @@ async def cmd_help(message: Message):
         "🔔 /reminders — настройки напоминаний\n"
         "🎟 Промокод: введите <code>#КОД</code> в чате\n"
         "📜 /history — история с фильтрами и страницами\n"
+        "⚙️ /settings — настройки профиля и приватность\n"
+        "🖼 /avatar — собственное фото или GIF\n"
+        "✏️ /bio — описание; /bet — сохранённая ставка\n"
+        "⭐ /favorites — избранные игры\n"
+        "▶ /resume — продолжить игру\n"
+        "📱 /devices — подключённые устройства\n"
+        "📄 /history_export — история в CSV\n"
+        "📈 /stats — статистика за месяц\n"
         "🏆 /rating — рейтинг игроков\n"
         "❌ /cancel — отменить действие или выйти из игры\n\n"
         "Все действия доступны через кнопки меню."
@@ -123,13 +150,13 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
         return
     is_admin = callback.from_user.id in ADMIN_IDS or bool(user["is_admin"])
     try:
-        await callback.message.edit_text(menu_text(user), reply_markup=main_menu(is_admin))
+        await callback.message.edit_text(menu_text(user), reply_markup=main_menu(is_admin, callback.from_user.id))
     except Exception:
         try:
             await callback.message.delete()
         except Exception:
             pass
-        await callback.message.answer(menu_text(user), reply_markup=main_menu(is_admin))
+        await callback.message.answer(menu_text(user), reply_markup=main_menu(is_admin, callback.from_user.id))
 
 
 @router.callback_query(F.data == "cancel", StateFilter("*"))
