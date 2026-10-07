@@ -1,7 +1,7 @@
 {
-  "version_code": 3,
-  "version_name": "0.3.0",
-  "apk_url": "https://github.com/RastyDima/TONBOTRG2/releases/download/android-v3/ton-casino.apk",
-  "sha256": "a4ca963a153369b4bc24604e04bf9b56fcdf4a1afdc6142ea7f5ba36f112ca54",
-  "size_bytes": 21831
+  "version_code": 4,
+  "version_name": "0.4.0",
+  "apk_url": "https://github.com/RastyDima/TONBOTRG2/releases/download/android-v4/ton-casino.apk",
+  "sha256": "4a0c3534f0fb6a8c08b6f6c0a9cb1128d112f2f35389d67e2e24b9eb9c4d1fa7",
+  "size_bytes": 25411
 }

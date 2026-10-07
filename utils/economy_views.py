@@ -74,4 +74,5 @@ def history_page(database, user_id: int, category: str = "all", page: int = 0,
         "text": history_text(transactions, category=HISTORY_LABELS[category],
                              page=page, pages=pages, total=total),
         "category": category, "page": page, "pages": pages, "anchor": anchor,
+        "transactions": transactions, "total": total,
     }

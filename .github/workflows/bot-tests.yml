@@ -3,9 +3,9 @@ name: Bot tests
 on:
   push:
     branches: [main, 'codex/**']
-    paths: ['**.py', 'requirements.txt', '.github/workflows/bot-tests.yml']
+    paths: ['**.py', 'webapp/**', 'tests/webapp/**', 'requirements.txt', '.github/workflows/bot-tests.yml']
   pull_request:
-    paths: ['**.py', 'requirements.txt', '.github/workflows/bot-tests.yml']
+    paths: ['**.py', 'webapp/**', 'tests/webapp/**', 'requirements.txt', '.github/workflows/bot-tests.yml']
   workflow_dispatch:
 
 permissions:
@@ -28,6 +28,24 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install WebApp test dependencies
+        working-directory: tests/webapp
+        run: npm install --no-audit --no-fund
+      - name: Install test browser
+        working-directory: tests/webapp
+        run: npx playwright install --with-deps chromium
+      - name: Check WebApp player journeys and Android avatar loading
+        working-directory: tests/webapp
+        run: npm test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: webapp-previews
+          path: tests/webapp/screenshots/
+          if-no-files-found: ignore
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -38,7 +56,7 @@ jobs:
         env:
           TEST_POSTGRES_URL: postgresql://bot_tests:bot_tests@localhost:5432/bot_tests
       - name: Run WebApp and device sessions with PostgreSQL
-        run: python -m unittest tests.test_webapp_mines -v
+        run: python -m unittest tests.test_webapp_mines tests.test_webapp_experience -v
         env:
           BOT_TOKEN: offline-webapp-tests
           RENDER: 'false'

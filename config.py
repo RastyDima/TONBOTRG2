@@ -32,14 +32,14 @@ ADMIN_PANEL_USER = os.getenv("ADMIN_PANEL_USER", "admin")
 ADMIN_PANEL_PASSWORD = os.getenv("ADMIN_PANEL_PASSWORD")
 if not ADMIN_PANEL_PASSWORD:
     ADMIN_PANEL_PASSWORD = secrets.token_urlsafe(16)
-    log.warning("ADMIN_PANEL_PASSWORD not set — generated random: %s", ADMIN_PANEL_PASSWORD)
+    log.warning("ADMIN_PANEL_PASSWORD not set — generated a temporary password")
 
 WEBHOOK_URL = os.getenv("WEBHOOK_URL") or None
 WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/webhook")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 if not WEBHOOK_SECRET:
     WEBHOOK_SECRET = secrets.token_urlsafe(32)
-    log.warning("WEBHOOK_SECRET not set — generated random: %s", WEBHOOK_SECRET)
+    log.warning("WEBHOOK_SECRET not set — generated a temporary secret")
 PORT = int(os.getenv("PORT", "8080"))
 
 if os.getenv("RENDER", "").lower() == "true" and not WEBHOOK_URL:

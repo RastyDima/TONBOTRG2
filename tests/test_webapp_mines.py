@@ -32,6 +32,7 @@ from games.mines import MinesGame  # noqa: E402
 from utils.game_registry import registry  # noqa: E402
 from webapp_auth import issue_session_token, verify_session_token  # noqa: E402
 from webapp_routes import register_webapp_routes  # noqa: E402
+from utils.avatars import Avatar, AvatarUnavailable  # noqa: E402
 
 
 def telegram_init_data(user_id: int) -> str:
@@ -88,6 +89,48 @@ class WebappMinesTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(verify_session_token(payload + "." + forged_signature))
         with patch("webapp_auth.time.time", return_value=time.time() + 86401):
             self.assertIsNone(verify_session_token(token))
+
+    async def test_avatar_requires_session_and_never_accepts_query_token(self):
+        with patch("webapp_routes.get_avatar", new_callable=AsyncMock) as fetcher:
+            for path in ("/app/api/profile/avatar", "/app/api/profile/avatar?token=" +
+                         issue_session_token(self.user_id)):
+                response = await self.client.get(path)
+                self.assertEqual(response.status, 401)
+            fetcher.assert_not_awaited()
+
+    async def test_avatar_uses_authenticated_identity_and_preserves_gif_bytes(self):
+        data = b"GIF89a-test-body"
+        with patch("webapp_routes.get_avatar", return_value=Avatar(data, "image/gif")) as fetcher:
+            response = await self.client.get("/app/api/profile/avatar?user_id=123",
+                                             headers=self.headers)
+        fetcher.assert_awaited_once_with(self.user_id)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(await response.read(), data)
+        self.assertEqual(response.content_type, "image/gif")
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+
+    async def test_missing_avatar_and_temporary_failure_have_distinct_responses(self):
+        with patch("webapp_routes.get_avatar", return_value=None):
+            response = await self.client.get("/app/api/profile/avatar", headers=self.headers)
+            self.assertEqual(response.status, 204)
+        with patch("webapp_routes.get_avatar", side_effect=AvatarUnavailable()):
+            response = await self.client.get("/app/api/profile/avatar", headers=self.headers)
+            self.assertEqual(response.status, 503)
+            self.assertEqual(response.headers["Retry-After"], "30")
+
+    async def test_android_session_can_load_avatar_but_revoked_session_cannot(self):
+        expires = int(time.time()) + 86400
+        session = db.create_mobile_session(self.user_id, "Avatar test", expires)
+        headers = {"Authorization": "Bearer " + issue_session_token(
+            self.user_id, mobile=True, session_id=session, expires_at=expires)}
+        with patch("webapp_routes.get_avatar", return_value=None) as fetcher:
+            response = await self.client.get("/app/api/profile/avatar", headers=headers)
+            self.assertEqual(response.status, 204)
+            db.revoke_mobile_session(self.user_id, session)
+            response = await self.client.get("/app/api/profile/avatar", headers=headers)
+            self.assertEqual(response.status, 401)
+        fetcher.assert_awaited_once_with(self.user_id)
 
     async def test_telegram_auth_issues_opaque_session(self):
         response = await self.client.post(
