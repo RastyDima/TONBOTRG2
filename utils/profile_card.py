@@ -29,14 +29,18 @@ TITLE_DISPLAY = {
     "title_crystal": ("ИСКАТЕЛЬ КРИСТАЛЛОВ", (114, 228, 255)),
     "title_vip": ("ЛОВЕЦ УДАЧИ", (242, 203, 116)),
     "title_elixir": ("ЛУННЫЙ АЛХИМИК", (183, 140, 255)),
-    "title_legend": ("ПОВЕЛИТЕЛЬ РИСКА", (255, 183, 109)),
+    "title_legend": ("РИСКОВЫЙ ПАРЕНЬ", (255, 183, 109)),
     "title_shadow": ("ХРАНИТЕЛЬ ТАЙНЫ", (137, 149, 255)),
-    "title_whale": ("АЛМАЗНЫЙ МАГНАТ", (112, 201, 255)),
+    "title_whale": ("МАГНАТ", (112, 201, 255)),
     "title_jackpot": ("ХРАНИТЕЛЬ ДЖЕКПОТА", (255, 117, 187)),
-    "title_god": ("ВЛАДЫКА СУДЬБЫ", PURPLE),
+    "title_god": ("СУДЬБА", PURPLE),
     "title_fortune": ("АРХИТЕКТОР ФОРТУНЫ", (114, 240, 178)),
     "title_owner": ("OWNER", (255, 142, 151)),
     "title_ket": ("KET", (111, 230, 192)),
+    "title_from_ket": ("ОТ КЕТА", (139, 0, 139)),
+    "title_girl": ("ДЕВЧЕНКА", (255, 0, 255)),
+    "title_huesos": ("ХУЕСОС", [(255, 0, 0), (255, 127, 0), (255, 255, 0),
+                                   (0, 255, 0), (0, 0, 255), (139, 0, 255)]),
 }
 
 
@@ -165,11 +169,29 @@ def _badge(img, xy, label, color):
     label = " ".join(str(label).split())
     label, size = _fit(label, 10, 320, True)
     x, y = xy
-    background = tuple(round(c * .14 + b * .86) for c, b in zip(color, PANEL))
+    palette = color if isinstance(color, list) else None
+    accent = palette[0] if palette else color
+    background = tuple(round(c * .14 + b * .86) for c, b in zip(accent, PANEL))
     _rect(img, (x, y, x + _width(label, size) + 28, y + 24), background, radius=8)
     ImageDraw.Draw(img).ellipse(((x + 9) * SCALE, (y + 10) * SCALE,
-                                (x + 13) * SCALE, (y + 14) * SCALE), fill=color)
-    _text(img, (x + 19, y + 7), label, size, color, bold=True)
+                                (x + 13) * SCALE, (y + 14) * SCALE), fill=accent)
+    if palette:
+        width = max(1, math.ceil(_width(label, size) * SCALE) + 2 * SCALE)
+        mask = Image.new("L", (width, 24 * SCALE))
+        _text(mask, (0, 7), label, size, 255, bold=True)
+        pixels = []
+        for px in range(width):
+            position = px * (len(palette) - 1) / max(width - 1, 1)
+            index = min(int(position), len(palette) - 2)
+            fraction = position - index
+            pixels.append(tuple(round(a + (b - a) * fraction)
+                                for a, b in zip(palette[index], palette[index + 1])))
+        strip = Image.new("RGB", (width, 1))
+        strip.putdata(pixels)
+        img.paste(strip.resize(mask.size),
+                  (round((x + 19) * SCALE), round(y * SCALE)), mask)
+    else:
+        _text(img, (x + 19, y + 7), label, size, color, bold=True)
 
 
 AVATAR_XY = (50, 89, 138, 177)

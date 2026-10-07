@@ -17,6 +17,12 @@ const TITLE_COLORS = {
     title_fortune: { color: '#72f0b2', bg: 'rgba(114,240,178,0.15)' },
     title_owner: { color: '#ff5050', bg: 'rgba(255,80,80,0.15)' },
     title_ket: { color: '#64ffc8', bg: 'rgba(100,255,200,0.15)' },
+    title_from_ket: { color: '#b663c9', bg: 'rgba(139,0,139,0.15)' },
+    title_girl: { color: '#ff66ff', bg: 'rgba(255,0,255,0.15)' },
+    title_huesos: {
+        color: '#ff7676', bg: 'rgba(255,80,80,0.15)',
+        gradient: 'linear-gradient(90deg, #ff0000, #ff7f00, #ffff00, #00ff00, #0000ff, #8b00ff)',
+    },
 };
 
 const FRAME_EMBLEMS = {
@@ -291,11 +297,12 @@ function ProfilePage({ profile, refreshProfile }) {
     const titleInfo = profile.active_title ? TITLE_COLORS[profile.active_title] : null;
     const titleNames = {
         title_spark: 'СОБИРАТЕЛЬ ИСКР', title_crystal: 'ИСКАТЕЛЬ КРИСТАЛЛОВ',
-        title_vip: 'ЛОВЕЦ УДАЧИ', title_legend: 'ПОВЕЛИТЕЛЬ РИСКА',
+        title_vip: 'ЛОВЕЦ УДАЧИ', title_legend: 'РИСКОВЫЙ ПАРЕНЬ',
         title_elixir: 'ЛУННЫЙ АЛХИМИК', title_shadow: 'ХРАНИТЕЛЬ ТАЙНЫ',
-        title_whale: 'АЛМАЗНЫЙ МАГНАТ', title_god: 'ВЛАДЫКА СУДЬБЫ',
+        title_whale: 'МАГНАТ', title_god: 'СУДЬБА',
         title_jackpot: 'ХРАНИТЕЛЬ ДЖЕКПОТА', title_fortune: 'АРХИТЕКТОР ФОРТУНЫ',
         title_owner: 'OWNER', title_ket: 'KET',
+        title_from_ket: 'ОТ КЕТА', title_girl: 'ДЕВЧЕНКА', title_huesos: 'ХУЕСОС',
     };
     const initials = (profile.first_name || 'K')[0].toUpperCase();
     const tgUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
@@ -318,7 +325,13 @@ function ProfilePage({ profile, refreshProfile }) {
                                 border: `1px solid ${titleInfo.color}40`,
                             }}
                         >
-                            {titleNames[profile.active_title] || profile.active_title}
+                            <span style={titleInfo.gradient ? {
+                                backgroundImage: titleInfo.gradient,
+                                backgroundClip: 'text', WebkitBackgroundClip: 'text',
+                                WebkitTextFillColor: 'transparent',
+                            } : undefined}>
+                                {titleNames[profile.active_title] || profile.active_title}
+                            </span>
                         </div>
                     )}
                     <div className="profile-progress">

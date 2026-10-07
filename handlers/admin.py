@@ -180,14 +180,17 @@ ALL_TITLES = [
     {"id": "title_crystal", "name": "Искатель кристаллов"},
     {"id": "title_vip", "name": "Ловец удачи"},
     {"id": "title_elixir", "name": "Лунный алхимик"},
-    {"id": "title_legend", "name": "Повелитель риска"},
+    {"id": "title_legend", "name": "Рисковый парень"},
     {"id": "title_shadow", "name": "Хранитель тайны"},
-    {"id": "title_whale", "name": "Алмазный магнат"},
+    {"id": "title_whale", "name": "Магнат"},
     {"id": "title_jackpot", "name": "Хранитель джекпота"},
-    {"id": "title_god", "name": "Владыка судьбы"},
+    {"id": "title_god", "name": "Судьба"},
     {"id": "title_fortune", "name": "Архитектор фортуны"},
     {"id": "title_owner", "name": "Владелец"},
     {"id": "title_ket", "name": "Кет"},
+    {"id": "title_from_ket", "name": "От Кета"},
+    {"id": "title_girl", "name": "Девченка"},
+    {"id": "title_huesos", "name": "Хуесос"},
 ]
 TITLE_BY_ID = {t["id"]: t for t in ALL_TITLES}
 

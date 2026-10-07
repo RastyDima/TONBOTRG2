@@ -25,21 +25,25 @@ SHOP_ITEMS = {
         {"id": "title_crystal", "name": "Искатель кристаллов", "price": 750_000},
         {"id": "title_vip", "name": "Ловец удачи", "price": 1_000_000},
         {"id": "title_elixir", "name": "Лунный алхимик", "price": 2_000_000},
-        {"id": "title_legend", "name": "Повелитель риска", "price": 3_000_000},
+        {"id": "title_legend", "name": "Рисковый парень", "price": 3_000_000},
         {"id": "title_shadow", "name": "Хранитель тайны", "price": 4_000_000},
-        {"id": "title_whale", "name": "Алмазный магнат", "price": 5_000_000},
+        {"id": "title_whale", "name": "Магнат", "price": 5_000_000},
         {"id": "title_jackpot", "name": "Хранитель джекпота", "price": 7_500_000},
-        {"id": "title_god", "name": "Владыка судьбы", "price": 10_000_000},
+        {"id": "title_god", "name": "Судьба", "price": 10_000_000},
         {"id": "title_fortune", "name": "Архитектор фортуны", "price": 15_000_000},
     ],
     "exclusive_titles": [
         {"id": "title_owner", "name": "Владелец"},
         {"id": "title_ket", "name": "Кет"},
+        {"id": "title_from_ket", "name": "От Кета"},
+        {"id": "title_girl", "name": "Девченка"},
+        {"id": "title_huesos", "name": "Хуесос"},
     ],
 }
 
 FRAME_BY_ID = {item["id"]: item for item in SHOP_ITEMS["frames"]}
 TITLE_BY_ID = {item["id"]: item for item in SHOP_ITEMS["titles"]}
+DISPLAY_TITLE_BY_ID = {**TITLE_BY_ID, **{item["id"]: item for item in SHOP_ITEMS["exclusive_titles"]}}
 ALL_BY_ID = {**FRAME_BY_ID, **TITLE_BY_ID}
 
 
@@ -179,7 +183,7 @@ async def shop_titles_callback(callback: CallbackQuery, state: FSMContext):
     active = user.get("active_title") if user else None
     text = f"🏷 <b>Титулы</b>\n\n💰 Баланс: <b>{_format_price(balance)} TON</b>"
     if active:
-        item = TITLE_BY_ID.get(active)
+        item = DISPLAY_TITLE_BY_ID.get(active)
         name = item["name"] if item else active
         text += f"\n🟢 Активный: <b>{name}</b>"
     text += "\n\nВыберите титул для покупки:"
